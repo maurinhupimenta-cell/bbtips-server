@@ -14,6 +14,7 @@ const DB_FILE = path.join(__dirname, "users.json");
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+app.use(express.static(__dirname));
 
 app.use((req, res, next) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -123,7 +124,7 @@ app.get("/admin", (req, res) => {
           <button>${u.active ? "Desativar agora" : "Ativar"}</button>
         </form>
 
-        <form method="post" action="/admin/delete" style="display:inline" onsubmit="return confirm('Remover usuário?')">
+        <form method="post" action="/admin/delete" style="display:inline">
           <input type="hidden" name="admin" value="${safe(admin)}">
           <input type="hidden" name="user" value="${safe(name)}">
           <button class="danger">Remover</button>
@@ -136,111 +137,124 @@ app.get("/admin", (req, res) => {
 <!doctype html>
 <html>
 <head>
-  <meta charset="utf-8">
-  <title>BBTips Admin</title>
-  <style>
-    body {
-      font-family: Arial;
-      background: #101820;
-      color: white;
-      padding: 24px;
-    }
+<meta charset="utf-8">
+<title>BBTips Admin</title>
 
-    input, button {
-      padding: 10px;
-      margin: 5px;
-      border-radius: 6px;
-      border: 0;
-    }
+<style>
+body{
+font-family:Arial;
+background:#101820;
+color:white;
+padding:24px;
+}
 
-    button {
-      background: #0b7189;
-      color: white;
-      font-weight: bold;
-      cursor: pointer;
-    }
+input,button{
+padding:10px;
+margin:5px;
+border-radius:6px;
+border:0;
+}
 
-    .danger {
-      background: #a62323;
-    }
+button{
+background:#0b7189;
+color:white;
+font-weight:bold;
+cursor:pointer;
+}
 
-    table {
-      width: 100%;
-      border-collapse: collapse;
-      margin-top: 20px;
-    }
+.danger{
+background:#a62323;
+}
 
-    td, th {
-      border: 1px solid #314657;
-      padding: 10px;
-    }
+table{
+width:100%;
+border-collapse:collapse;
+margin-top:20px;
+}
 
-    th {
-      background: #162331;
-    }
+td,th{
+border:1px solid #314657;
+padding:10px;
+}
 
-    .box {
-      background: #162331;
-      padding: 16px;
-      border-radius: 10px;
-      margin-bottom: 16px;
-    }
+th{
+background:#162331;
+}
 
-    code {
-      color: #40ff7b;
-      word-break: break-all;
-    }
-  </style>
+.box{
+background:#162331;
+padding:16px;
+border-radius:10px;
+margin-bottom:16px;
+}
+
+code{
+color:#40ff7b;
+word-break:break-all;
+}
+</style>
 </head>
+
 <body>
-  <h1>BBTips Admin</h1>
 
-  ${!logged ? `
-    <div class="box">
-      <h3>Entrar como admin</h3>
-      <form method="get" action="/admin">
-        <input name="admin" placeholder="Senha admin" type="password">
-        <button>Entrar</button>
-      </form>
-      <p>Senha inicial: <b>admin123</b></p>
-    </div>
-  ` : `
-    <div class="box">
-      <b>Logado.</b><br><br>
-      Guarde este link:
-      <br>
-      <code>${BASE_URL}/admin?admin=${safe(admin)}</code>
-    </div>
+<h1>BBTips Admin</h1>
 
-    <div class="box">
-      <h3>Criar usuário</h3>
-      <form method="post" action="/admin/create">
-        <input type="hidden" name="admin" value="${safe(admin)}">
-        <input name="user" placeholder="login">
-        <input name="password" placeholder="senha">
-        <button>Criar</button>
-      </form>
-    </div>
+${!logged ? `
+<div class="box">
+<h3>Entrar como admin</h3>
 
-    <table>
-      <tr>
-        <th>Usuário</th>
-        <th>Status</th>
-        <th>Último login</th>
-        <th>Ações</th>
-      </tr>
-      ${rows}
-    </table>
-  `}
+<form method="get" action="/admin">
+<input name="admin" placeholder="Senha admin" type="password">
+<button>Entrar</button>
+</form>
+
+<p>Senha inicial: <b>admin123</b></p>
+</div>
+` : `
+
+<div class="box">
+<b>Logado.</b><br><br>
+
+Guarde este link:
+<br>
+
+<code>${BASE_URL}/admin?admin=${safe(admin)}</code>
+</div>
+
+<div class="box">
+<h3>Criar usuário</h3>
+
+<form method="post" action="/admin/create">
+<input type="hidden" name="admin" value="${safe(admin)}">
+<input name="user" placeholder="login">
+<input name="password" placeholder="senha">
+<button>Criar</button>
+</form>
+</div>
+
+<table>
+<tr>
+<th>Usuário</th>
+<th>Status</th>
+<th>Último login</th>
+<th>Ações</th>
+</tr>
+
+${rows}
+
+</table>
+`}
+
 </body>
 </html>
-  `);
+`);
 });
 
 app.post("/admin/create", (req, res) => {
   if (!isAdmin(req)) return res.status(403).send("admin inválido");
 
   const db = loadDB();
+
   const name = String(req.body.user || "").trim();
   const password = String(req.body.password || "").trim();
 
@@ -254,6 +268,7 @@ app.post("/admin/create", (req, res) => {
   }
 
   saveDB(db);
+
   res.redirect(`/admin?admin=${encodeURIComponent(req.body.admin)}`);
 });
 
@@ -261,6 +276,7 @@ app.post("/admin/toggle", (req, res) => {
   if (!isAdmin(req)) return res.status(403).send("admin inválido");
 
   const db = loadDB();
+
   const u = db.users[String(req.body.user || "")];
 
   if (u) {
@@ -272,6 +288,7 @@ app.post("/admin/toggle", (req, res) => {
   }
 
   saveDB(db);
+
   res.redirect(`/admin?admin=${encodeURIComponent(req.body.admin)}`);
 });
 
@@ -283,10 +300,10 @@ app.post("/admin/delete", (req, res) => {
   delete db.users[String(req.body.user || "")];
 
   saveDB(db);
+
   res.redirect(`/admin?admin=${encodeURIComponent(req.body.admin)}`);
 });
 
 app.listen(PORT, () => {
   console.log(`BBTips servidor rodando: ${BASE_URL}/admin`);
-  console.log("Admin inicial: admin123 | Usuário teste: teste / 123456");
 });
