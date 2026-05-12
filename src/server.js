@@ -1,4 +1,6 @@
 import crypto from "node:crypto";
+import fs from "node:fs/promises";
+import path from "node:path";
 import express from "express";
 import cors from "cors";
 import bcrypt from "bcryptjs";
@@ -84,6 +86,28 @@ async function initDb() {
 
 app.get("/api/health", (_req, res) => {
   res.json({ ok: true, name: "bbtips-server" });
+});
+
+app.get("/api/robo.js", async (req, res) => {
+  const token = req.query.token || req.headers.authorization?.replace(/^Bearer\s+/i, "");
+  const payload = readToken(String(token || ""));
+  if (!payload || !["user", "admin"].includes(payload.type)) {
+    return res
+      .status(401)
+      .type("application/javascript")
+      .send("console.error('BBTips: login nao autorizado para carregar o robo.');");
+  }
+  try {
+    const file = await fs.readFile(path.join(process.cwd(), "robo.js"), "utf8");
+    res.setHeader("Cache-Control", "no-store, max-age=0");
+    res.type("application/javascript").send(file);
+  } catch (error) {
+    console.error(error);
+    res
+      .status(500)
+      .type("application/javascript")
+      .send("console.error('BBTips: robo.js nao encontrado no servidor.');");
+  }
 });
 
 app.post("/api/admin/login", async (req, res) => {
