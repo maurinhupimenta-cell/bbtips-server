@@ -773,6 +773,62 @@ function oddBand(v){
   if(v<10)return "5.00-9.99";
   return "10+";
 }
+function avg(nums){return nums.length?nums.reduce((a,b)=>a+b,0)/nums.length:null}
+function marketCycleStats(m){
+  const hist=resultHistoryForMarket(m).slice(0,80);
+  if(!hist.length)return null;
+  const current=hist[0].green?"GREEN":"RED";
+  let streak=0,lastGreen=null,lastRed=null;
+  for(let i=0;i<hist.length;i++){
+    if((hist[i].green?"GREEN":"RED")===current)streak++;
+    else break;
+  }
+  for(let i=0;i<hist.length;i++){
+    if(hist[i].green&&lastGreen===null)lastGreen=i;
+    if(!hist[i].green&&lastRed===null)lastRed=i;
+  }
+  const blocks={GREEN:[],RED:[]};
+  let prev=null,count=0;
+  hist.slice(0,50).forEach(r=>{
+    const s=r.green?"GREEN":"RED";
+    if(prev===null){prev=s;count=1;return;}
+    if(s===prev){count++;return;}
+    blocks[prev].push(count);
+    prev=s;count=1;
+  });
+  if(prev)blocks[prev].push(count);
+  const avgGreen=avg(blocks.GREEN),avgRed=avg(blocks.RED);
+  const media=current==="RED"?avgRed:avgGreen;
+  let fase="inicio de bloco";
+  if(media&&streak>=Math.max(2,media*0.8))fase="ponto de virada";
+  else if(streak>=3)fase="meio de bloco";
+  const pressao=current==="RED"&&avgRed?Math.min(100,streak/Math.max(1,avgRed)*50):current==="RED"?streak*10:0;
+  return {current,streak,lastGreen,lastRed,avgGreen,avgRed,fase,pressao,hist:hist.length};
+}
+function oddBandStats(game,m){
+  const band=oddBand(game.odd);
+  if(!band)return null;
+  const rows=RESULTS_CACHE.filter(r=>{
+    const odds=oddsForMarket(r.txt,m);
+    return odds.some(o=>oddBand(o)===band);
+  }).slice(0,80);
+  if(!rows.length)return {band,j:0,g:0,p:null,cold:false};
+  const g=rows.filter(r=>paysMarket(r.score,m)).length;
+  const p=g/rows.length*100;
+  return {band,j:rows.length,g,p,cold:rows.length>=5&&p<40};
+}
+function cycleText(c){
+  if(!c)return "Ciclo: sem base";
+  const lg=c.lastGreen===null?"sem green":`${c.lastGreen} jogos`;
+  const ar=Number.isFinite(c.avgRed)?c.avgRed.toFixed(1):"-";
+  const ag=Number.isFinite(c.avgGreen)?c.avgGreen.toFixed(1):"-";
+  return `Ciclo: ${c.streak} ${c.current} seguidos | ultimo GREEN ${lg}<br>Media blocos RED ${ar} / GREEN ${ag} | fase ${c.fase} | pressao ${c.pressao.toFixed(0)}`;
+}
+function oddBandText(o){
+  if(!o)return "Faixa odd: sem base";
+  const pct=o.p===null?"-":`${o.p.toFixed(1)}%`;
+  return `Faixa odd ${esc(o.band)}: ${o.g}/${o.j} ${pct}${o.cold?" ODD FRIA":""}`;
+}
 function scoreModelForGame(game,m){
   const names=teamNames(game.name);
   const oddAtual=Number.isFinite(game.odd)?game.odd:null;
@@ -923,6 +979,8 @@ function analysisForGame(g,series){
   const bestEv=evs.length?Math.max(...evs.map(r=>r.ev)):null;
   const team=teamPayPct(g,g.market);
   const odd=oddPayPct(g,g.market);
+  const cycle=marketCycleStats(g.market);
+  const band=oddBandStats(g,g.market);
   const graphP=best?.ready?best.p:null;
   const prob=weightedProb(graphP,team,odd);
   const fairOdd=prob?100/prob:null;
@@ -935,9 +993,12 @@ function analysisForGame(g,series){
   if(evGale!==null&&evGale>0)score+=20;
   if(team)score+=Math.max(0,Math.min(20,(team.p-50)/2));
   if(odd)score+=Math.max(0,Math.min(20,(odd.p-50)/2));
+  if(cycle&&cycle.current==="RED"&&cycle.avgRed&&cycle.streak>=cycle.avgRed)score+=10;
+  if(cycle&&cycle.current==="GREEN"&&cycle.avgGreen&&cycle.streak>=cycle.avgGreen*1.5)score-=5;
+  if(band&&band.cold)score-=10;
   if(minHits.some(r=>r.w>=480))score+=10;
   const strongBase=(team&&team.p>=50)||(odd&&odd.p>=50)||(!team&&!odd&&prob!==null);
-  const coldOdd=odd&&odd.j>=CONFIG.minOddSample&&odd.p<CONFIG.minOddPct;
+  const coldOdd=(odd&&odd.j>=CONFIG.minOddSample&&odd.p<CONFIG.minOddPct)||(band&&band.cold);
   const valueOk=fairOdd!==null&&g.odd>=fairOdd;
   if(evGale!==null&&evGale>=CONFIG.minEV&&prob!==null&&prob>=CONFIG.minProb&&!coldOdd)score=Math.max(score,70);
   if(score<45&&prob!==null&&prob>=45&&!coldOdd)score=45;
@@ -945,7 +1006,7 @@ function analysisForGame(g,series){
   if(coldOdd)score=Math.min(score,44);
   const status=score>=70?"ENTRAR":score>=45?"OBSERVAR":"PASSAR";
   const motivo=coldOdd?"ODD FRIA":status;
-  return {reads,best,bestEv,team,odd,prob,fairOdd,ev,evGale,score:Math.round(score),status,motivo,coldOdd,valueOk};
+  return {reads,best,bestEv,team,odd,cycle,band,prob,fairOdd,ev,evGale,score:Math.round(score),status,motivo,coldOdd,valueOk};
 }
 function analyze(){
   const games=readGridGames();
@@ -1032,18 +1093,22 @@ function gamesTable(games,series){
     const evG=an.evGale===null?"-":`${an.evGale.toFixed(1)}%`;
     const team=an.team?`${an.team.g}/${an.team.j} ${an.team.p.toFixed(1)}%`:"sem base";
     const odd=an.odd?`${an.odd.g}/${an.odd.j} ${an.odd.p.toFixed(1)}%${an.coldOdd?" ODD FRIA":""}`:"sem base";
+    const ciclo=cycleText(an.cycle);
+    const faixa=oddBandText(an.band);
     const scorePull=scorePullText(scoreModelForGame(g,g.market));
-    return `<tr><td>${esc(g.time)}</td><td>${esc(g.name)}</td><td>${esc(g.market.name)}</td><td>${g.odd.toFixed(2)}</td><td class="${cls}">${esc(an.motivo)}<br>Score ${an.score}</td><td>Prob real ${prob}<br>Odd justa ${fair}<br>EV ${ev}<br>EV gale ${evG}</td><td>Times geral: ${team}<br>${teamDetailText(g,g.market)}<br>Odd: ${odd}<br>Placar puxa: ${scorePull}</td><td>${reads}</td></tr>`;
+    return `<tr><td>${esc(g.time)}</td><td>${esc(g.name)}</td><td>${esc(g.market.name)}</td><td>${g.odd.toFixed(2)}</td><td class="${cls}">${esc(an.motivo)}<br>Score ${an.score}</td><td>Prob real ${prob}<br>Odd justa ${fair}<br>EV ${ev}<br>EV gale ${evG}<br>${ciclo}<br>${faixa}</td><td>Times geral: ${team}<br>${teamDetailText(g,g.market)}<br>Odd: ${odd}<br>Placar puxa: ${scorePull}</td><td>${reads}</td></tr>`;
   }).join("")}</table>`;
 }
 function signalsBox(signals){
   const fundos=globalFundos([]).filter(f=>f.ready&&f.j>=f.w);
+  const cycle=marketCycleStats(market());
+  const cicloHtml=cycle?`<div class="sig"><b class="${cycle.current==="RED"&&cycle.pressao>=70?"ok":"warn"}">CICLO ${esc(market().name)}</b> ${cycleText(cycle)}</div>`:"";
   const fundoHtml=fundos.length?fundos.map(f=>`<div class="sig"><b class="ok">BATEU MINIMA ${f.w}</b> ${esc(market().name)} | ${f.g}/${f.j} ${f.p.toFixed(1)}% | minima ${f.min.toFixed(1)}%</div>`).join(""):"";
-  if(!signals.length&&!fundoHtml)return "<p class='warn'>Sem sinal agora. O som toca quando a linha calculada do mercado bater fundo/minima em 120, 240, 480 ou 960.</p>";
+  if(!signals.length&&!fundoHtml)return `${cicloHtml}<p class='warn'>Sem sinal agora. O som toca quando a linha calculada do mercado bater fundo/minima em 120, 240, 480 ou 960.</p>`;
   return signals.map(s=>{
     const tipo=s.tipo||"FUNDO";
     return `<div class="sig"><b class="ok">${tipo} ${s.best.w}</b> ${esc(s.game.market.name)} @${s.game.odd.toFixed(2)} | ${esc(s.game.time)} ${esc(s.game.name)} | atual ${Number.isFinite(s.best.cur)?s.best.cur.toFixed(1):"-"} min ${Number.isFinite(s.best.min)?s.best.min.toFixed(1):"-"} EV ${Number.isFinite(s.best.ev)?s.best.ev.toFixed(1):"-"}%</div>`;
-  }).join("")+fundoHtml;
+  }).join("")+cicloHtml+fundoHtml;
 }
 function trendBox(series){
   const rows=calcResultWindows(market());
@@ -1069,7 +1134,7 @@ function resultsCheckTable(){
   }).join("")}</table>`;
 }
 function exportHistory(){
-  const data={quando:new Date().toISOString(),mercado:market().name,api:API_ROWS,resultados:RESULTS_CACHE,historico:storeGet(HIST_STORE,"[]"),alertas:storeGet(ALERT_LOG_STORE,"[]"),placares:RESULTS_CACHE.filter(r=>r.score).map(r=>({time:r.time,name:r.name,score:r.score,puxa:scoreNextStats(r.score,market())}))};
+  const data={quando:new Date().toISOString(),mercado:market().name,ciclo:marketCycleStats(market()),api:API_ROWS,resultados:RESULTS_CACHE,historico:storeGet(HIST_STORE,"[]"),alertas:storeGet(ALERT_LOG_STORE,"[]"),placares:RESULTS_CACHE.filter(r=>r.score).map(r=>({time:r.time,name:r.name,score:r.score,puxa:scoreNextStats(r.score,market())}))};
   const txt=JSON.stringify(data,null,2);
   try{navigator.clipboard?.writeText(txt)}catch(e){}
   const a=document.createElement("a");
