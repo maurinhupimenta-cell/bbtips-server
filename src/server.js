@@ -54,6 +54,15 @@ function requireAdmin(req, res, next) {
   next();
 }
 
+function endOfBrazilDay(value) {
+  if (!value) return null;
+  const raw = String(value).slice(0, 10);
+  const match = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return new Date(value);
+  const [, y, m, d] = match;
+  return new Date(`${y}-${m}-${d}T23:59:59-03:00`);
+}
+
 async function initDb() {
   await pool.query(`
     create table if not exists admins (
@@ -144,7 +153,7 @@ app.post("/api/admin/users", requireAdmin, async (req, res) => {
       expires_at = excluded.expires_at,
       note = excluded.note
     returning id, username, active, expires_at, note, created_at
-  `, [username, hash, Boolean(active), expiresAt || null, note]);
+  `, [username, hash, Boolean(active), endOfBrazilDay(expiresAt), note]);
   res.json({ ok: true, user: result.rows[0] });
 });
 
@@ -157,7 +166,7 @@ app.patch("/api/admin/users/:id", requireAdmin, async (req, res) => {
         note = coalesce($3, note)
     where id = $4
     returning id, username, active, expires_at, note, created_at
-  `, [active === undefined ? null : Boolean(active), expiresAt || null, note ?? null, req.params.id]);
+  `, [active === undefined ? null : Boolean(active), endOfBrazilDay(expiresAt), note ?? null, req.params.id]);
   res.json({ ok: true, user: result.rows[0] });
 });
 
@@ -176,7 +185,7 @@ app.post("/api/login", async (req, res) => {
   if (!user.active) {
     return res.status(403).json({ ok: false, error: "usuario bloqueado" });
   }
-  if (user.expires_at && new Date(user.expires_at).getTime() < Date.now()) {
+  if (user.expires_at && endOfBrazilDay(user.expires_at).getTime() < Date.now()) {
     return res.status(403).json({ ok: false, error: "acesso vencido" });
   }
   res.json({

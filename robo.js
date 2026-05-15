@@ -586,6 +586,13 @@ function resultHistoryForMarket(m){
     .map(r=>({name:r.name,score:r.score,green:paysMarket(r.score,m),txt:r.txt}))
     .filter(r=>r.green!==null);
 }
+function visualCycleHistoryForMarket(m){
+  const grid=gridResultCells();
+  const base=grid.length>=5?grid.slice().sort((a,b)=>b.idx-a.idx):RESULTS_CACHE;
+  return base
+    .map(r=>({name:r.name,score:r.score,green:paysMarket(r.score,m),txt:r.txt,time:r.time,idx:r.idx}))
+    .filter(r=>r.green!==null);
+}
 function calcResultWindows(m){
   const hist=resultHistoryForMarket(m);
   return CONFIG.windows.map(w=>{
@@ -775,7 +782,7 @@ function oddBand(v){
 }
 function avg(nums){return nums.length?nums.reduce((a,b)=>a+b,0)/nums.length:null}
 function marketCycleStats(m){
-  const hist=resultHistoryForMarket(m).slice(0,80);
+  const hist=visualCycleHistoryForMarket(m).slice(0,80);
   if(!hist.length)return null;
   const current=hist[0].green?"GREEN":"RED";
   let streak=0,lastGreen=null,lastRed=null;
@@ -828,6 +835,34 @@ function oddBandText(o){
   if(!o)return "Faixa odd: sem base";
   const pct=o.p===null?"-":`${o.p.toFixed(1)}%`;
   return `Faixa odd ${esc(o.band)}: ${o.g}/${o.j} ${pct}${o.cold?" ODD FRIA":""}`;
+}
+function hourOf(v){
+  const hm=parseTime(v);
+  return hm===null?null:Math.floor(hm/60);
+}
+function hourStatsForGame(game,m){
+  const h=hourOf(game.time);
+  if(h===null)return null;
+  const rows=RESULTS_CACHE.filter(r=>hourOf(r.time)===h&&paysMarket(r.score,m)!==null).slice(0,120);
+  if(!rows.length)return {h,j:0,g:0,p:null,tag:"sem base"};
+  const g=rows.filter(r=>paysMarket(r.score,m)).length;
+  const p=g/rows.length*100;
+  const geral=calcResultWindows(m).find(r=>r.w===240)?.p;
+  const tag=Number.isFinite(geral)?(p>=geral+8?"HORARIO QUENTE":p<=geral-8?"HORARIO FRIO":"horario neutro"):"";
+  return {h,j:rows.length,g,p,tag};
+}
+function hourStatsText(s){
+  if(!s)return "Horario: sem base";
+  const hh=String(s.h).padStart(2,"0");
+  const pct=s.p===null?"-":`${s.p.toFixed(1)}%`;
+  return `Horario ${hh}h: ${s.g}/${s.j} ${pct}${s.tag?` ${s.tag}`:""}`;
+}
+function ligaStatsText(m){
+  const r=calcResultWindows(m).find(x=>x.w===240)||calcResultWindows(m).find(x=>x.ready);
+  if(!r||!r.ready)return "Liga atual: sem base";
+  const media=resultHistoryForMarket(m).length?resultHistoryForMarket(m).filter(x=>x.green).length/resultHistoryForMarket(m).length*100:null;
+  const tag=Number.isFinite(media)?(r.p>=media+5?"LIGA QUENTE":r.p<=media-5?"LIGA FRIA":"liga neutra"):"";
+  return `Liga atual: ${r.g}/${r.j} ${r.p.toFixed(1)}%${tag?` ${tag}`:""}`;
 }
 function scoreModelForGame(game,m){
   const names=teamNames(game.name);
@@ -981,6 +1016,7 @@ function analysisForGame(g,series){
   const odd=oddPayPct(g,g.market);
   const cycle=marketCycleStats(g.market);
   const band=oddBandStats(g,g.market);
+  const hour=hourStatsForGame(g,g.market);
   const graphP=best?.ready?best.p:null;
   const prob=weightedProb(graphP,team,odd);
   const fairOdd=prob?100/prob:null;
@@ -996,6 +1032,8 @@ function analysisForGame(g,series){
   if(cycle&&cycle.current==="RED"&&cycle.avgRed&&cycle.streak>=cycle.avgRed)score+=10;
   if(cycle&&cycle.current==="GREEN"&&cycle.avgGreen&&cycle.streak>=cycle.avgGreen*1.5)score-=5;
   if(band&&band.cold)score-=10;
+  if(hour&&hour.tag==="HORARIO QUENTE")score+=8;
+  if(hour&&hour.tag==="HORARIO FRIO")score-=6;
   if(minHits.some(r=>r.w>=480))score+=10;
   const strongBase=(team&&team.p>=50)||(odd&&odd.p>=50)||(!team&&!odd&&prob!==null);
   const coldOdd=(odd&&odd.j>=CONFIG.minOddSample&&odd.p<CONFIG.minOddPct)||(band&&band.cold);
@@ -1006,7 +1044,7 @@ function analysisForGame(g,series){
   if(coldOdd)score=Math.min(score,44);
   const status=score>=70?"ENTRAR":score>=45?"OBSERVAR":"PASSAR";
   const motivo=coldOdd?"ODD FRIA":status;
-  return {reads,best,bestEv,team,odd,cycle,band,prob,fairOdd,ev,evGale,score:Math.round(score),status,motivo,coldOdd,valueOk};
+  return {reads,best,bestEv,team,odd,cycle,band,hour,prob,fairOdd,ev,evGale,score:Math.round(score),status,motivo,coldOdd,valueOk};
 }
 function analyze(){
   const games=readGridGames();
@@ -1036,7 +1074,7 @@ function notify(signals){
   });
   localStorage.setItem(SEEN,JSON.stringify([...seen].slice(-100)));
 }
-function notifyFundo(series){
+function notifyFundo(series,games=[]){
   const liga=ligaNome(),m=market(),agora=new Date().toLocaleTimeString();
   const scope=`${liga}|${m.key}`;
   const rows=calcResultWindows(m);
@@ -1047,12 +1085,13 @@ function notifyFundo(series){
     rows.forEach(f=>{
       if(!f.ready||f.j<f.w)return;
       const k=`${scope}|${f.w}`;
-      state[k]={hit:!!f.fundoMin,p:f.p,armed:false,at:new Date().toISOString()};
+      state[k]={hit:!!f.fundoMin,p:f.p,armed:false,at:new Date().toISOString(),firstHitAt:f.fundoMin?new Date().toISOString():null};
     });
     storeSet(ALERT_STATE_STORE,state);
     return;
   }
   const fired=[];
+  const now=Date.now();
   rows.forEach(f=>{
     if(!f.ready||f.j<f.w)return;
     const hit=!!f.fundoMin;
@@ -1060,19 +1099,46 @@ function notifyFundo(series){
     const prev=state[k]||{hit:false,armed:true,p:null};
     if(!hit){state[k]={hit:false,p:f.p,armed:true,at:new Date().toISOString()};return;}
     const piorou=prev.hit&&Number.isFinite(f.p)&&Number.isFinite(prev.p)&&f.p<prev.p-CONFIG.tol;
-    const shouldAlert=(prev.armed&&!prev.hit)||piorou;
-    state[k]={hit:true,p:f.p,armed:false,at:new Date().toISOString()};
+    const firstHitAt=prev.firstHitAt||new Date().toISOString();
+    const lastAlert=Date.parse(prev.alertAt||firstHitAt||0)||0;
+    const lembrete=prev.hit&&(f.w===120||f.w===240)&&Number.isFinite(f.p)&&Number.isFinite(f.min)&&f.p<=f.min+CONFIG.tol&&(now-lastAlert>=18*60*1000);
+    const shouldAlert=(prev.armed&&!prev.hit)||piorou||lembrete;
+    state[k]={hit:true,p:f.p,armed:false,at:new Date().toISOString(),firstHitAt,alertAt:shouldAlert?new Date().toISOString():prev.alertAt};
     if(!shouldAlert)return;
     fired.push(f);
   });
+  const movimento=games
+    .map(g=>({g,an:g.analysis||analysisForGame(g,series)}))
+    .filter(x=>{
+      const c=x.an.cycle;
+      const press=c&&c.current==="RED"?c.pressao:0;
+      const fundo=x.an.reads.some(r=>r.ready&&r.fundoMin&&(r.w===120||r.w===240));
+      const horarioQuente=x.an.hour&&x.an.hour.tag==="HORARIO QUENTE";
+      const galeOk=Number.isFinite(x.an.evGale)&&x.an.evGale>-20;
+      return press>=55&&(fundo||horarioQuente||galeOk);
+    })
+    .sort((a,b)=>(b.an.cycle?.pressao||0)-(a.an.cycle?.pressao||0))[0];
+  if(movimento){
+    const k=`${scope}|MOVIMENTO`;
+    const prev=state[k]||{};
+    const last=Date.parse(prev.alertAt||0)||0;
+    if(now-last>=12*60*1000){
+      state[k]={alertAt:new Date().toISOString(),time:movimento.g.time,name:movimento.g.name,pressao:movimento.an.cycle?.pressao||0};
+      fired.push({movimento:true,game:movimento.g,an:movimento.an});
+    }
+  }
   storeSet(ALERT_STATE_STORE,state);
   if(!fired.length)return;
   if(Date.now()-LAST_ALERT_TS<90000)return;
   LAST_ALERT_TS=Date.now();
   beep();
-  const resumo=fired.map(f=>`${f.w}: ${f.g}/${f.j} ${f.p.toFixed(1)}% min ${Number.isFinite(f.min)?f.min.toFixed(1):"-"}%`).join(" | ");
-  const msg=`${liga} | ${m.name} | ${agora} | BATEU MINIMA | ${resumo}`;
-  log.push({quando:new Date().toISOString(),hora:agora,liga,mercado:m.name,janelas:fired.map(f=>({janela:f.w,atual:f.p,minima:f.min,g:f.g,j:f.j})),tipo:"BATEU MINIMA"});
+  const mins=fired.filter(f=>!f.movimento);
+  const movs=fired.filter(f=>f.movimento);
+  const resumoMin=mins.map(f=>`${f.w}: ${f.g}/${f.j} ${f.p.toFixed(1)}% min ${Number.isFinite(f.min)?f.min.toFixed(1):"-"}%`).join(" | ");
+  const resumoMov=movs.map(f=>`MOV ${f.game.time} ${f.game.name} pressao ${(f.an.cycle?.pressao||0).toFixed(0)} score ${f.an.score}`).join(" | ");
+  const tipo=mins.length?"BATEU MINIMA":"MOVIMENTO POSITIVO";
+  const msg=`${liga} | ${m.name} | ${agora} | ${[resumoMin,resumoMov].filter(Boolean).join(" | ")}`;
+  log.push({quando:new Date().toISOString(),hora:agora,liga,mercado:m.name,janelas:mins.map(f=>({janela:f.w,atual:f.p,minima:f.min,g:f.g,j:f.j})),movimentos:movs.map(f=>({time:f.game.time,name:f.game.name,odd:f.game.odd,pressao:f.an.cycle?.pressao||0,score:f.an.score,status:f.an.status})),tipo});
   if("Notification" in window&&Notification.permission==="granted")new Notification("BBTips: minima",{body:msg});
   else if("Notification" in window&&Notification.permission!=="denied")Notification.requestPermission();
   storeSet(ALERT_LOG_STORE,log.slice(-50));
@@ -1095,8 +1161,10 @@ function gamesTable(games,series){
     const odd=an.odd?`${an.odd.g}/${an.odd.j} ${an.odd.p.toFixed(1)}%${an.coldOdd?" ODD FRIA":""}`:"sem base";
     const ciclo=cycleText(an.cycle);
     const faixa=oddBandText(an.band);
+    const horario=hourStatsText(an.hour);
+    const liga=ligaStatsText(g.market);
     const scorePull=scorePullText(scoreModelForGame(g,g.market));
-    return `<tr><td>${esc(g.time)}</td><td>${esc(g.name)}</td><td>${esc(g.market.name)}</td><td>${g.odd.toFixed(2)}</td><td class="${cls}">${esc(an.motivo)}<br>Score ${an.score}</td><td>Prob real ${prob}<br>Odd justa ${fair}<br>EV ${ev}<br>EV gale ${evG}<br>${ciclo}<br>${faixa}</td><td>Times geral: ${team}<br>${teamDetailText(g,g.market)}<br>Odd: ${odd}<br>Placar puxa: ${scorePull}</td><td>${reads}</td></tr>`;
+    return `<tr><td>${esc(g.time)}</td><td>${esc(g.name)}</td><td>${esc(g.market.name)}</td><td>${g.odd.toFixed(2)}</td><td class="${cls}">${esc(an.motivo)}<br>Score ${an.score}</td><td>Prob real ${prob}<br>Odd justa ${fair}<br>EV ${ev}<br>EV gale ${evG}<br>${ciclo}<br>${faixa}<br>${horario}<br>${liga}</td><td>Times geral: ${team}<br>${teamDetailText(g,g.market)}<br>Odd: ${odd}<br>Placar puxa: ${scorePull}</td><td>${reads}</td></tr>`;
   }).join("")}</table>`;
 }
 function signalsBox(signals){
@@ -1151,7 +1219,7 @@ function exportHistory(){
   refreshResultsCache();
   const a=analyze();
   notify(a.signals);
-  notifyFundo(a.series);
+  notifyFundo(a.series,a.games);
   const fundos=[...globalFundos(a.series),...visualFundos(a.series)];
   const fundoTxt=fundos.length?` | FUNDO ${fundos.map(f=>`${f.w}:${f.p.toFixed(1)}%`).join(" ")}`:"";
   const ligaAtual=activeLiga();
