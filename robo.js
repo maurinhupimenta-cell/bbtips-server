@@ -6,6 +6,7 @@ const API_STORE="BBTIPS_FINAL_API_ROWS_V2";
 const HIST_STORE="BBTIPS_FINAL_RESULTADOS_HIST_V1";
 const ALERT_STATE_STORE="BBTIPS_FINAL_ALERT_STATE_V1";
 const ALERT_LOG_STORE="BBTIPS_FINAL_ALERT_LOG_V1";
+const PRED_STORE="BBTIPS_FINAL_PREVISOES_1G_V1";
 document.getElementById(PANEL)?.remove();
 document.getElementById(PANEL+"-style")?.remove();
 clearInterval(window[TIMER]);
@@ -318,6 +319,25 @@ function activeLiga(){
   });
   return best;
 }
+function activeCasa(){
+  const names=["bet365","betano","kiron","sportingbet"];
+  let best="",score=-1;
+  document.querySelectorAll("button,div,span,a,li").forEach(el=>{
+    const txt=esc(el.innerText||"").toLowerCase();
+    const name=names.find(n=>txt===n||txt.startsWith(n+" ")||txt.includes(" "+n+" "));
+    if(!name)return;
+    const r=el.getBoundingClientRect?.();
+    if(!r||r.width<30||r.height<12||r.top<0||r.top>120)return;
+    const cls=(el.className||"").toString();
+    const st=getComputedStyle(el);
+    const active=/active|selected|ativo/i.test(cls)?80:0;
+    const bright=(st.color||"").match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/i);
+    const c=bright?Number(bright[1])+Number(bright[2])+Number(bright[3]):0;
+    const s=active+c/20+r.width/20;
+    if(s>score){score=s;best=name}
+  });
+  return best||"site";
+}
 function apiUrl(liga,futuro){
   return `https://api.thtips.com.br/api/futebolvirtual?liga=${liga}&futuro=${futuro?"true":"false"}&Horas=${CONFIG.horas}&tipoOdd=&dadosAlteracao=&filtros=${encodeURIComponent(CONFIG.filtros)}&confrontos=false&hrsConfrontos=240`;
 }
@@ -351,6 +371,7 @@ function upcomingSetFromPage(){
 function readGridGames(){
   const games=[],apiGames=[],seen=new Set(),upcoming=upcomingSetFromPage();
   const liga=activeLiga();
+  const casa=activeCasa();
   document.querySelectorAll("table").forEach(table=>{
     const rows=[...table.querySelectorAll("tr")];
     const minuteByCol={};
@@ -383,7 +404,7 @@ function readGridGames(){
           const key=`${time}|${name}|${m.key}|${odds[0]}`;
           if(seen.has(key))return;
           seen.add(key);
-          games.push({time,name,market:m,odd:odds[0],text:txt});
+          games.push({time,name,market:m,odd:odds[0],text:txt,liga,casa,fonte:"dom"});
         });
       });
     });
@@ -398,7 +419,7 @@ function readGridGames(){
       const key=`${r.time}|${r.name}|${m.key}|${odd}`;
       if(seen.has(key))return;
       seen.add(key);
-      apiGames.push({time:r.time,name:r.name,market:m,odd,text:txtFromApiRow(r),api:true});
+      apiGames.push({time:r.time,name:r.name,market:m,odd,text:txtFromApiRow(r),api:true,liga:r.liga||liga,casa:"api",fonte:"api"});
     });
   });
   return apiGames.sort((a,b)=>(parseTime(a.time)??9999)-(parseTime(b.time)??9999)).slice(0,CONFIG.maxProximos);
@@ -590,7 +611,10 @@ function lineRead(series,odd){
   });
 }
 function resultHistoryForMarket(m){
-  return RESULTS_CACHE
+  const liga=activeLiga(),casa=activeCasa();
+  let rows=RESULTS_CACHE.filter(r=>(!liga||!r.liga||r.liga===liga)&&(!casa||!r.casa||r.casa===casa));
+  if(rows.length<30)rows=RESULTS_CACHE.filter(r=>(!liga||!r.liga||r.liga===liga));
+  return rows
     .map(r=>({name:r.name,score:r.score,green:paysMarket(r.score,m),txt:r.txt}))
     .filter(r=>r.green!==null);
 }
@@ -631,12 +655,15 @@ function calcResultWindows(m){
     const confirmadoFundo=!!(viradaFundo||estabilizouFundo);
     const fundoSemConfirmacao=!!(fundoMin&&!confirmadoFundo);
     const caindoTopo=ready&&max!==null&&prev!==null&&prev>=max-CONFIG.tol&&pctVal<prev;
-    const zona=topo?"TOPO":viradaFundo?"VIRADA FUNDO":estabilizouFundo?"FUNDO ESTAVEL":fundoMin?"FUNDO SEM CONFIRMACAO":abaixoEq?"ABAIXO EQ":"ACIMA EQ";
-    return {w,j,g,p:pctVal,min,max,media,prev,tend,ready,fundo30,fundoMin,estabilizouFundo,confirmadoFundo,fundoSemConfirmacao,topo,abaixoEq,viradaFundo,caindoTopo,zona};
+    const fundoRespirando=ready&&fundoMin&&!topo&&Number.isFinite(tend)&&tend>=-CONFIG.tol;
+    const reacaoAbaixoEq=ready&&abaixoEq&&!fundoMin&&!topo&&Number.isFinite(tend)&&tend>=CONFIG.tol;
+    const alertaOk=!!(confirmadoFundo||fundoRespirando||reacaoAbaixoEq);
+    const zona=topo?"TOPO":viradaFundo?"VIRADA FUNDO":estabilizouFundo?"FUNDO ESTAVEL":fundoRespirando?"FUNDO RESPIRANDO":fundoMin?"FUNDO SEM CONFIRMACAO":reacaoAbaixoEq?"REACAO ABAIXO EQ":abaixoEq?"ABAIXO EQ":"ACIMA EQ";
+    return {w,j,g,p:pctVal,min,max,media,prev,tend,ready,fundo30,fundoMin,estabilizouFundo,confirmadoFundo,fundoRespirando,reacaoAbaixoEq,alertaOk,fundoSemConfirmacao,topo,abaixoEq,viradaFundo,caindoTopo,zona};
   });
 }
 function globalFundos(series){
-  return calcResultWindows(market()).filter(r=>r.ready&&r.j>=r.w&&r.confirmadoFundo);
+  return calcResultWindows(market()).filter(r=>r.ready&&r.j>=r.w&&r.alertaOk);
 }
 function visualFundos(series){
   return [];
@@ -736,17 +763,21 @@ function gridResultCells(){
 }
 function refreshResultsCache(){
   const liga=activeLiga();
+  const casa=activeCasa();
   const apiHist=API_ROWS.filter(r=>r.score&&!r.future&&(!liga||!r.liga||r.liga===liga)).map((r,i)=>({
     txt:txtFromApiRow(r),
     score:r.score,
     name:r.name,
     time:r.time,
+    liga:r.liga||liga,
+    casa:"api",
     top:-10000+i,
     left:0,
     idx:i,
     api:true
   }));
   const dom=allResultCells();
+  dom.forEach(r=>{r.liga=liga;r.casa=casa;r.fonte="dom"});
   const seen=new Set();
   RESULTS_CACHE=[...apiHist,...dom].filter(r=>{
     const key=`${r.name}|${r.score?.a}-${r.score?.b}`;
@@ -947,9 +978,7 @@ function adaptiveSignalForGame(g,ctx){
 }
 function adaptiveText(ai){
   if(!ai)return "IA: sem base";
-  const m=ai.moment;
-  const fmt=v=>Number.isFinite(v)?v.toFixed(1):"-";
-  return `IA ${ai.score}/${ai.threshold} ${ai.status}<br>Momento ${m.regime}: 30j ${fmt(m.p30)} | 60j ${fmt(m.p60)} | 120j ${fmt(m.p120)} | tendencia ${fmt(m.trend)}<br>${oneGaleText(ai.gale)}${ai.motivos?.length?`<br>Motivos: ${ai.motivos.map(esc).join(" | ")}`:""}`;
+  return `IA ${ai.score}/${ai.threshold} ${ai.status}${ai.motivos?.length?`<br>Motivos: ${ai.motivos.map(esc).join(" | ")}`:""}`;
 }
 function scoreModelForGame(game,m){
   const names=teamNames(game.name);
@@ -1049,6 +1078,75 @@ function teamMomentRankText(game,m){
   const line=t=>`${esc(t)}: 3h ${teamWindowRank(t,m,3)} | 6h ${teamWindowRank(t,m,6)} | 12h ${teamWindowRank(t,m,12)}`;
   return `Ranking momento ${esc(m.name)}:<br>${line(p[0])}<br>${line(p[1])}`;
 }
+function scopedResultRows(m,hours=null){
+  const liga=activeLiga(),casa=activeCasa();
+  let rows=RESULTS_CACHE.filter(r=>r.score&&paysMarket(r.score,m)!==null&&(!liga||!r.liga||r.liga===liga)&&(!casa||!r.casa||r.casa===casa));
+  if(rows.length<30)rows=RESULTS_CACHE.filter(r=>r.score&&paysMarket(r.score,m)!==null&&(!liga||!r.liga||r.liga===liga));
+  if(Number.isFinite(hours))rows=rows.filter(r=>resultAge(r)<=hours*60);
+  return rows;
+}
+function teamMarketRanking(m,hours,limit=8){
+  const map={};
+  scopedResultRows(m,hours).forEach(r=>{
+    teamNames(r.name).forEach(t=>{
+      if(!t)return;
+      if(!map[t])map[t]={name:t,g:0,j:0,p:0};
+      map[t].j++;
+      if(paysMarket(r.score,m))map[t].g++;
+    });
+  });
+  return Object.values(map).filter(x=>x.j>=2).map(x=>({...x,p:x.g/x.j*100})).sort((a,b)=>b.p-a.p||b.j-a.j).slice(0,limit);
+}
+function oddMarketRanking(m,limit=8){
+  const map={};
+  scopedResultRows(m,null).slice(0,240).forEach(r=>{
+    const paid=paysMarket(r.score,m);
+    oddsForMarket(r.txt,m).forEach(o=>{
+      const key=o.toFixed(2);
+      if(!map[key])map[key]={odd:key,g:0,j:0,p:0};
+      map[key].j++;
+      if(paid)map[key].g++;
+    });
+  });
+  return Object.values(map).filter(x=>x.j>=2).map(x=>({...x,p:x.g/x.j*100})).sort((a,b)=>b.p-a.p||b.j-a.j).slice(0,limit);
+}
+function oddBandRanking(m,limit=6){
+  const map={};
+  scopedResultRows(m,null).slice(0,240).forEach(r=>{
+    const paid=paysMarket(r.score,m);
+    oddsForMarket(r.txt,m).forEach(o=>{
+      const key=oddBand(o);
+      if(!key)return;
+      if(!map[key])map[key]={band:key,g:0,j:0,p:0};
+      map[key].j++;
+      if(paid)map[key].g++;
+    });
+  });
+  return Object.values(map).filter(x=>x.j>=4).map(x=>({...x,p:x.g/x.j*100})).sort((a,b)=>b.p-a.p||b.j-a.j).slice(0,limit);
+}
+function rankLine(list,type){
+  if(!list.length)return "sem base";
+  if(type==="team")return list.map((x,i)=>`${i+1}. ${esc(x.name)} ${x.g}/${x.j} ${x.p.toFixed(1)}%`).join(" | ");
+  if(type==="band")return list.map((x,i)=>`${i+1}. ${esc(x.band)} ${x.g}/${x.j} ${x.p.toFixed(1)}%`).join(" | ");
+  return list.map((x,i)=>`${i+1}. @${esc(x.odd)} ${x.g}/${x.j} ${x.p.toFixed(1)}%`).join(" | ");
+}
+function marketRankingBox(m){
+  const t3=teamMarketRanking(m,3,5),t6=teamMarketRanking(m,6,5),t12=teamMarketRanking(m,12,5);
+  const odds=oddMarketRanking(m,8),bands=oddBandRanking(m,6);
+  return `<div class="sig"><b class="ok">Ranking do mercado ${esc(m.name)}</b><br>Times 3h: ${rankLine(t3,"team")}<br>Times 6h: ${rankLine(t6,"team")}<br>Times 12h: ${rankLine(t12,"team")}<br>Odds exatas: ${rankLine(odds,"odd")}<br>Faixas de odd: ${rankLine(bands,"band")}</div>`;
+}
+function gameRankText(game,m){
+  const p=teamNames(game.name);
+  const t12=teamMarketRanking(m,12,80);
+  const place=t=>{
+    const i=t12.findIndex(x=>x.name===t);
+    return i>=0?`#${i+1} ${t12[i].g}/${t12[i].j} ${t12[i].p.toFixed(1)}%`:"sem rank 12h";
+  };
+  const odds=oddMarketRanking(m,80);
+  const oi=odds.findIndex(x=>Math.abs(Number(x.odd)-game.odd)<=0.05);
+  const oTxt=oi>=0?`Odd atual #${oi+1} @${odds[oi].odd} ${odds[oi].g}/${odds[oi].j} ${odds[oi].p.toFixed(1)}%`:"Odd atual sem rank";
+  return `${p[0]?`Rank ${esc(p[0])}: ${place(p[0])}<br>`:""}${p[1]?`Rank ${esc(p[1])}: ${place(p[1])}<br>`:""}${oTxt}`;
+}
 function oneGaleStats(m){
   const hist=resultHistoryForMarket(m).slice(0,260);
   let red=0,total=0,hit=0,distSum=0,distHits=0;
@@ -1072,21 +1170,58 @@ function oneGaleText(s){
   const d=Number.isFinite(s.avgDist)?s.avgDist.toFixed(1):"-";
   return `1 gale historico: ${s.hit}/${s.total} ${p}% | distancia media green ${d} jogos`;
 }
-function statusPayStats(m){
-  const items=[];
-  RESULTS_CACHE.filter(r=>r.score).slice().sort((a,b)=>resultAge(a)-resultAge(b)||a.top-b.top||a.idx-b.idx).slice(0,400).forEach(r=>{
-    const odds=oddsForMarket(r.txt,m);
-    if(!odds.length)return;
-    const g={time:r.time,name:r.name,market:m,odd:odds[0],text:r.txt};
-    const an=analysisForGame(g,[]);
-    if(an.status!=="ENTRAR"&&an.status!=="OBSERVAR")return;
-    items.push({status:an.status,paid:paysMarket(r.score,m),odd:odds[0],time:r.time,name:r.name,score:r.score});
+function adaptiveMarketSummary(m){
+  const mm=marketMoment(m);
+  const gale=oneGaleStats(m);
+  const fmt=v=>Number.isFinite(v)?v.toFixed(1):"-";
+  return `<div class="sig"><b class="warn">IA do mercado</b> ${esc(m.name)} | Momento ${mm.regime}: 30j ${fmt(mm.p30)} | 60j ${fmt(mm.p60)} | 120j ${fmt(mm.p120)} | tendencia ${fmt(mm.trend)}<br>${oneGaleText(gale)}</div>`;
+}
+function normKey(v){return esc(v).toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,"").replace(/\s+/g," ")}
+function predKey(g){return [g.liga||activeLiga()||"",g.casa||activeCasa()||"",g.market?.key||CONFIG.market,g.time||"",normKey(g.name)].join("|")}
+function loadPreds(){return storeGet(PRED_STORE,"[]")}
+function savePreds(list){storeSet(PRED_STORE,list.slice(-500))}
+function registerPrediction(g){
+  const an=g.analysis;
+  if(!an||!["ENTRAR","OBSERVAR"].includes(an.status))return;
+  const list=loadPreds();
+  const key=predKey(g);
+  let item=list.find(x=>x.key===key&&!x.settled);
+  if(!item){
+    item={key,liga:g.liga||activeLiga(),casa:g.casa||activeCasa(),market:g.market.key,marketName:g.market.name,time:g.time,name:g.name,odd:g.odd,status:an.status,score:an.score,createdAt:new Date().toISOString(),settled:false};
+    list.push(item);
+  }else{
+    item.status=an.status;item.score=an.score;item.odd=g.odd;item.updatedAt=new Date().toISOString();
+  }
+  savePreds(list);
+}
+function settlePredictions(m){
+  const list=loadPreds();
+  let changed=false;
+  list.filter(x=>!x.settled&&x.market===m.key).forEach(x=>{
+    const row=RESULTS_CACHE.find(r=>{
+      if(x.liga&&r.liga&&x.liga!==r.liga)return false;
+      if(x.casa&&r.casa&&x.casa!==r.casa)return false;
+      if(x.time&&r.time&&String(x.time)!==String(r.time))return false;
+      return normKey(r.name)===normKey(x.name)&&r.score;
+    });
+    if(!row)return;
+    x.settled=true;
+    x.resultAt=new Date().toISOString();
+    x.scoreResult=`${row.score.a}-${row.score.b}`;
+    x.paid=!!paysMarket(row.score,m);
+    changed=true;
   });
+  if(changed)savePreds(list);
+  return list;
+}
+function statusPayStats(m){
+  const liga=activeLiga(),casa=activeCasa();
+  const items=settlePredictions(m).filter(x=>x.settled&&x.market===m.key&&(!liga||!x.liga||x.liga===liga)&&(!casa||!x.casa||x.casa===casa)).slice(-120).reverse();
   const out={ENTRAR:{g:0,j:0,streak:0,last:""},OBSERVAR:{g:0,j:0,streak:0,last:""}};
   items.forEach(x=>{out[x.status].j++;if(x.paid)out[x.status].g++;});
   ["ENTRAR","OBSERVAR"].forEach(st=>{
     for(const x of items.filter(i=>i.status===st)){
-      if(x.paid){out[st].last=`pagou ${x.time||"-"} ${x.name} ${x.score.a}-${x.score.b}`;break;}
+      if(x.paid){out[st].last=`pagou ${x.time||"-"} ${x.name} ${x.scoreResult||""}`;break;}
       out[st].streak++;
     }
   });
@@ -1141,7 +1276,7 @@ function analysisForGame(g,series){
     ...r,
     cur:r.p,
     ev:r.p===null?null:(r.p/100*g.odd-1)*100,
-    fundo:r.confirmadoFundo
+    fundo:r.alertaOk
   }));
   const reads=resultReads;
   const valid=reads.filter(r=>r.ready);
@@ -1195,6 +1330,7 @@ function analyze(){
   const signals=[];
   games.forEach(g=>{
     g.analysis=analysisForGame(g,series);
+    registerPrediction(g);
     const hits=g.analysis.reads.filter(r=>r.ready&&r.fundo&&(r.fundo30||r.fundoMin)&&Number.isFinite(r.ev));
     const podeSinal=g.analysis.prob!==null&&g.analysis.prob>=CONFIG.minProb&&g.analysis.evGale!==null&&g.analysis.evGale>=CONFIG.minEV&&!g.analysis.coldOdd;
     if(hits.length&&podeSinal){
@@ -1223,7 +1359,7 @@ function notifyFundo(series,games=[]){
   const rows=calcResultWindows(m);
   const futuros=games
     .map(g=>({...g,diff:minutesUntil(g.time)}))
-    .filter(g=>Number.isFinite(g.diff)&&g.diff>=2&&g.diff<=7);
+    .filter(g=>Number.isFinite(g.diff)&&g.diff>=1&&g.diff<=10);
   if(!futuros.length){
     let state=storeGet(ALERT_STATE_STORE,"{}");
     state[`${scope}|SEM_FUTURO`]={at:new Date().toISOString()};
@@ -1239,7 +1375,7 @@ function notifyFundo(series,games=[]){
     rows.forEach(f=>{
       if(!f.ready||f.j<f.w)return;
       const k=`${scope}|${f.w}`;
-      state[k]={hit:!!f.confirmadoFundo,p:f.p,armed:false,at:new Date().toISOString(),firstHitAt:f.confirmadoFundo?new Date().toISOString():null};
+      state[k]={hit:!!f.alertaOk,p:f.p,armed:false,at:new Date().toISOString(),firstHitAt:f.alertaOk?new Date().toISOString():null};
     });
     storeSet(ALERT_STATE_STORE,state);
     return;
@@ -1248,7 +1384,7 @@ function notifyFundo(series,games=[]){
   const now=Date.now();
   rows.forEach(f=>{
     if(!f.ready||f.j<f.w)return;
-    const hit=!!f.confirmadoFundo;
+    const hit=!!f.alertaOk;
     const k=`${scope}|${f.w}`;
     const prev=state[k]||{hit:false,armed:true,p:null};
     if(!hit){state[k]={hit:false,p:f.p,armed:true,at:new Date().toISOString()};return;}
@@ -1303,11 +1439,11 @@ function notifyFundo(series,games=[]){
 }
 function gamesTable(games,series){
   if(!games.length)return "<p class='bad'>Nao achei proximos jogos com odd deste mercado. Clique API ou escolha um mercado que aparece nas odds dos proximos jogos.</p>";
-  return `<table><tr><th>Horario</th><th>Jogo</th><th>Mercado</th><th>Odd</th><th>Status</th><th>Probabilidade</th><th>Times/Odd pagante</th><th>Linha 120/240/480/960</th></tr>${games.map(g=>{
+  return `${adaptiveMarketSummary(market())}${marketRankingBox(market())}<table><tr><th>Horario</th><th>Jogo</th><th>Mercado</th><th>Odd</th><th>Status</th><th>Probabilidade</th><th>Times/Odd pagante</th><th>Linha 120/240/480/960</th></tr>${games.map(g=>{
     const an=g.analysis||analysisForGame(g,series);
     const reads=an.reads.map(r=>{
-      const cls=(r.viradaFundo||r.estabilizouFundo)?"ok":r.topo||r.fundoSemConfirmacao?"bad":r.ready?"warn":"bad";
-      const tag=r.viradaFundo?" VIRADA":r.estabilizouFundo?" FUNDO OK":r.fundoSemConfirmacao?" FUNDO SEM CONF":r.fundo30?" <30":r.topo?" TOPO":"";
+      const cls=(r.alertaOk)?"ok":r.topo||r.fundoSemConfirmacao?"bad":r.ready?"warn":"bad";
+      const tag=r.viradaFundo?" VIRADA":r.estabilizouFundo?" FUNDO OK":r.fundoRespirando?" RESPIRANDO":r.reacaoAbaixoEq?" REACAO":r.fundoSemConfirmacao?" FUNDO SEM CONF":r.fundo30?" <30":r.topo?" TOPO":"";
       return `<span class="${cls}">${r.w}: ${r.ready?`${r.g}/${r.j} ${r.p.toFixed(1)}% min ${r.min.toFixed(1)} eq ${Number.isFinite(r.media)?r.media.toFixed(1):"-"} max ${Number.isFinite(r.max)?r.max.toFixed(1):"-"} ${r.zona}${tag} EV ${Number.isFinite(r.ev)?r.ev.toFixed(1):"-"}`:`parcial ${r.g}/${r.j} de ${r.w}`}</span>`;
     }).join("<br>");
     const cls=an.status==="ENTRAR"?"ok":an.status==="OBSERVAR"?"warn":"bad";
@@ -1323,7 +1459,7 @@ function gamesTable(games,series){
     const liga=ligaStatsText(g.market);
     const ia=adaptiveText(an.ia);
     const scorePull=scorePullText(scoreModelForGame(g,g.market));
-    return `<tr><td>${esc(g.time)}</td><td>${esc(g.name)}</td><td>${esc(g.market.name)}</td><td>${g.odd.toFixed(2)}</td><td class="${cls}">${esc(an.motivo)}<br>Score ${an.score}<br>${ia}</td><td>Prob real ${prob}<br>Odd justa ${fair}<br>EV ${ev}<br>EV gale ${evG}<br>${ciclo}<br>${faixa}<br>${horario}<br>${liga}</td><td>Times geral: ${team}<br>${teamDetailText(g,g.market)}<br>${teamMomentRankText(g,g.market)}<br>Odd: ${odd}<br>Placar puxa: ${scorePull}</td><td>${reads}</td></tr>`;
+    return `<tr><td>${esc(g.time)}</td><td>${esc(g.name)}</td><td>${esc(g.market.name)}</td><td>${g.odd.toFixed(2)}</td><td class="${cls}">${esc(an.motivo)}<br>Score ${an.score}<br>${ia}</td><td>Prob real ${prob}<br>Odd justa ${fair}<br>EV ${ev}<br>EV gale ${evG}<br>${ciclo}<br>${faixa}<br>${horario}<br>${liga}</td><td>Times geral: ${team}<br>${teamDetailText(g,g.market)}<br>${gameRankText(g,g.market)}<br>Odd: ${odd}<br>Placar puxa: ${scorePull}</td><td>${reads}</td></tr>`;
   }).join("")}</table>`;
 }
 function signalsBox(signals){
@@ -1361,7 +1497,7 @@ function resultsCheckTable(){
   }).join("")}</table>`;
 }
 function exportHistory(){
-  const data={quando:new Date().toISOString(),mercado:market().name,ciclo:marketCycleStats(market()),api:API_ROWS,resultados:RESULTS_CACHE,historico:storeGet(HIST_STORE,"[]"),alertas:storeGet(ALERT_LOG_STORE,"[]"),placares:RESULTS_CACHE.filter(r=>r.score).map(r=>({time:r.time,name:r.name,score:r.score,puxa:scoreNextStats(r.score,market())}))};
+  const data={quando:new Date().toISOString(),casa:activeCasa(),liga:activeLiga(),mercado:market().name,ciclo:marketCycleStats(market()),api:API_ROWS,resultados:RESULTS_CACHE,historico:storeGet(HIST_STORE,"[]"),alertas:storeGet(ALERT_LOG_STORE,"[]"),previsoes:loadPreds(),placares:RESULTS_CACHE.filter(r=>r.score).map(r=>({time:r.time,name:r.name,score:r.score,puxa:scoreNextStats(r.score,market())}))};
   const txt=JSON.stringify(data,null,2);
   try{navigator.clipboard?.writeText(txt)}catch(e){}
   const a=document.createElement("a");

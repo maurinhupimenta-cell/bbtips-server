@@ -23,7 +23,7 @@ const pool = new Pool({
 });
 
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: "1mb" }));
 app.use(express.static("public"));
 
 function tokenFor(payload) {
@@ -51,6 +51,16 @@ function requireAdmin(req, res, next) {
   if (!payload || payload.type !== "admin") {
     return res.status(401).json({ ok: false, error: "admin nao autorizado" });
   }
+  next();
+}
+
+function requireUserOrAdmin(req, res, next) {
+  const token = req.headers.authorization?.replace(/^Bearer\s+/i, "");
+  const payload = readToken(token);
+  if (!payload || !["user", "admin"].includes(payload.type)) {
+    return res.status(401).json({ ok: false, error: "nao autorizado" });
+  }
+  req.auth = payload;
   next();
 }
 
@@ -85,6 +95,16 @@ async function initDb() {
     );
   `);
 
+  await pool.query(`
+    create table if not exists telemetry (
+      id serial primary key,
+      username text not null,
+      kind text default 'robo',
+      payload jsonb not null,
+      created_at timestamptz default now()
+    );
+  `);
+
   const hash = await bcrypt.hash(adminPass, 10);
   await pool.query(`
     insert into admins (username, password_hash)
@@ -108,8 +128,10 @@ app.get("/api/robo.js", async (req, res) => {
   }
   try {
     const file = await fs.readFile(path.join(process.cwd(), "robo.js"), "utf8");
+    const apiBase = `${req.protocol}://${req.get("host")}`;
+    const cfg = `window.__BBTIPS_REMOTE_CONFIG=${JSON.stringify({ apiBase, token: String(token || ""), username: payload.username || "admin" })};\n`;
     res.setHeader("Cache-Control", "no-store, max-age=0");
-    res.type("application/javascript").send(file);
+    res.type("application/javascript").send(cfg + file);
   } catch (error) {
     console.error(error);
     res
@@ -117,6 +139,26 @@ app.get("/api/robo.js", async (req, res) => {
       .type("application/javascript")
       .send("console.error('BBTips: robo.js nao encontrado no servidor.');");
   }
+});
+
+app.post("/api/telemetry", requireUserOrAdmin, async (req, res) => {
+  const payload = req.body || {};
+  await pool.query(
+    "insert into telemetry (username, kind, payload) values ($1, $2, $3)",
+    [req.auth.username || "admin", payload.kind || "robo", payload]
+  );
+  res.json({ ok: true });
+});
+
+app.get("/api/admin/telemetry", requireAdmin, async (req, res) => {
+  const limit = Math.max(1, Math.min(100, Number(req.query.limit) || 30));
+  const rows = await pool.query(`
+    select id, username, kind, payload, created_at
+    from telemetry
+    order by id desc
+    limit $1
+  `, [limit]);
+  res.json({ ok: true, rows: rows.rows });
 });
 
 app.post("/api/admin/login", async (req, res) => {
