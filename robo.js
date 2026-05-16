@@ -885,7 +885,7 @@ function cycleText(c){
 function oddBandText(o){
   if(!o)return "Faixa odd: sem base";
   const pct=o.p===null?"-":`${o.p.toFixed(1)}%`;
-  return `Faixa odd ${esc(o.band)}: ${o.g}/${o.j} ${pct}${o.cold?" ODD FRIA":""}`;
+  return `Odd fixa/grupo ${esc(o.band)}: ${o.g}/${o.j} ${pct}${o.cold?" ODD FRIA":""}`;
 }
 function hourOf(v){
   const hm=parseTime(v);
@@ -1110,30 +1110,15 @@ function oddMarketRanking(m,limit=8){
   });
   return Object.values(map).filter(x=>x.j>=2).map(x=>({...x,p:x.g/x.j*100})).sort((a,b)=>b.p-a.p||b.j-a.j).slice(0,limit);
 }
-function oddBandRanking(m,limit=6){
-  const map={};
-  scopedResultRows(m,null).slice(0,240).forEach(r=>{
-    const paid=paysMarket(r.score,m);
-    oddsForMarket(r.txt,m).forEach(o=>{
-      const key=oddBand(o);
-      if(!key)return;
-      if(!map[key])map[key]={band:key,g:0,j:0,p:0};
-      map[key].j++;
-      if(paid)map[key].g++;
-    });
-  });
-  return Object.values(map).filter(x=>x.j>=4).map(x=>({...x,p:x.g/x.j*100})).sort((a,b)=>b.p-a.p||b.j-a.j).slice(0,limit);
-}
 function rankLine(list,type){
   if(!list.length)return "sem base";
   if(type==="team")return list.map((x,i)=>`${i+1}. ${esc(x.name)} ${x.g}/${x.j} ${x.p.toFixed(1)}%`).join(" | ");
-  if(type==="band")return list.map((x,i)=>`${i+1}. ${esc(x.band)} ${x.g}/${x.j} ${x.p.toFixed(1)}%`).join(" | ");
   return list.map((x,i)=>`${i+1}. @${esc(x.odd)} ${x.g}/${x.j} ${x.p.toFixed(1)}%`).join(" | ");
 }
 function marketRankingBox(m){
   const t3=teamMarketRanking(m,3,5),t6=teamMarketRanking(m,6,5),t12=teamMarketRanking(m,12,5);
-  const odds=oddMarketRanking(m,8),bands=oddBandRanking(m,6);
-  return `<div class="sig"><b class="ok">Ranking do mercado ${esc(m.name)}</b><br>Times 3h: ${rankLine(t3,"team")}<br>Times 6h: ${rankLine(t6,"team")}<br>Times 12h: ${rankLine(t12,"team")}<br>Odds exatas: ${rankLine(odds,"odd")}<br>Faixas de odd: ${rankLine(bands,"band")}</div>`;
+  const odds=oddMarketRanking(m,10);
+  return `<div class="sig"><b class="ok">Ranking do mercado ${esc(m.name)}</b><br><b>Ranking dos times 6h:</b> ${rankLine(t6,"team")}<br>Ranking dos times 3h: ${rankLine(t3,"team")}<br>Ranking dos times 12h: ${rankLine(t12,"team")}<br>Ranking das odds fixas: ${rankLine(odds,"odd")}</div>`;
 }
 function gameRankText(game,m){
   const p=teamNames(game.name);
