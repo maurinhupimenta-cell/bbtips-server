@@ -608,7 +608,7 @@ function calcResultWindows(m){
     const j=arr.length;
     const g=arr.filter(x=>x.green).length;
     const pctVal=j?g/j*100:null;
-    let min=null;
+    let min=null,max=null,media=null,prev=null,tend=null;
     if(hist.length>=w){
       const vals=[];
       for(let i=0;i<=hist.length-w;i++){
@@ -616,15 +616,27 @@ function calcResultWindows(m){
         vals.push(sub.filter(x=>x.green).length/sub.length*100);
       }
       min=Math.min(...vals);
+      max=Math.max(...vals);
+      media=vals.reduce((a,b)=>a+b,0)/vals.length;
+      prev=vals[1]??null;
+      tend=Number.isFinite(prev)&&Number.isFinite(pctVal)?pctVal-prev:null;
     }
     const ready=j>=w;
     const fundo30=ready&&pctVal!==null&&pctVal<=30;
     const fundoMin=ready&&min!==null&&pctVal<=min+CONFIG.tol;
-    return {w,j,g,p:pctVal,min,ready,fundo30,fundoMin};
+    const topo=ready&&max!==null&&pctVal>=max-CONFIG.tol;
+    const abaixoEq=ready&&media!==null&&pctVal<=media;
+    const viradaFundo=ready&&min!==null&&media!==null&&prev!==null&&prev<=min+CONFIG.tol&&pctVal>prev&&pctVal<=media+CONFIG.tol;
+    const estabilizouFundo=ready&&fundoMin&&Number.isFinite(tend)&&tend>=0;
+    const confirmadoFundo=!!(viradaFundo||estabilizouFundo);
+    const fundoSemConfirmacao=!!(fundoMin&&!confirmadoFundo);
+    const caindoTopo=ready&&max!==null&&prev!==null&&prev>=max-CONFIG.tol&&pctVal<prev;
+    const zona=topo?"TOPO":viradaFundo?"VIRADA FUNDO":estabilizouFundo?"FUNDO ESTAVEL":fundoMin?"FUNDO SEM CONFIRMACAO":abaixoEq?"ABAIXO EQ":"ACIMA EQ";
+    return {w,j,g,p:pctVal,min,max,media,prev,tend,ready,fundo30,fundoMin,estabilizouFundo,confirmadoFundo,fundoSemConfirmacao,topo,abaixoEq,viradaFundo,caindoTopo,zona};
   });
 }
 function globalFundos(series){
-  return calcResultWindows(market()).filter(r=>r.ready&&r.j>=r.w&&(r.fundo30||r.fundoMin));
+  return calcResultWindows(market()).filter(r=>r.ready&&r.j>=r.w&&r.confirmadoFundo);
 }
 function visualFundos(series){
   return [];
@@ -872,6 +884,73 @@ function ligaStatsText(m){
   const tag=Number.isFinite(media)?(r.p>=media+5?"LIGA QUENTE":r.p<=media-5?"LIGA FRIA":"liga neutra"):"";
   return `Liga atual: ${r.g}/${r.j} ${r.p.toFixed(1)}%${tag?` ${tag}`:""}`;
 }
+function pctWindow(hist,n){
+  const arr=hist.slice(0,n);
+  if(!arr.length)return null;
+  return arr.filter(x=>x.green).length/arr.length*100;
+}
+function marketMoment(m){
+  const hist=resultHistoryForMarket(m);
+  const p30=pctWindow(hist,30),p60=pctWindow(hist,60),p120=pctWindow(hist,120),p240=pctWindow(hist,240);
+  const trend=Number.isFinite(p30)&&Number.isFinite(p120)?p30-p120:null;
+  const accel=Number.isFinite(p30)&&Number.isFinite(p60)?p30-p60:null;
+  let regime="NEUTRO",threshold=62;
+  if(Number.isFinite(trend)&&trend>=8&&Number.isFinite(accel)&&accel>=-3){regime="QUENTE";threshold=56;}
+  else if(Number.isFinite(trend)&&trend<=-8){regime="FRIO";threshold=70;}
+  else if(Number.isFinite(trend)&&trend>=4){regime="MELHORANDO";threshold=59;}
+  else if(Number.isFinite(trend)&&trend<=-4){regime="PIORANDO";threshold=66;}
+  return {p30,p60,p120,p240,trend,accel,regime,threshold,hist:hist.length};
+}
+function adaptiveSignalForGame(g,ctx){
+  const moment=marketMoment(g.market);
+  const best=ctx.best||{};
+  const motivos=[];
+  const add=(v,t)=>{s+=v;if(t)motivos.push(t)};
+  let s=35;
+  if(best.viradaFundo)add(18,"virada do fundo");
+  else if(best.estabilizouFundo)add(14,"fundo estabilizado");
+  else if(best.fundoSemConfirmacao)add(-10,"fundo sem confirmacao");
+  else if(best.abaixoEq)add(8,"abaixo equilibrio");
+  if(best.topo)add(-30,"bloqueia topo");
+  if(best.caindoTopo)add(-15,"caindo do topo");
+  if(Number.isFinite(moment.trend)){
+    const ajuste=Math.max(-15,Math.min(15,moment.trend*1.2));
+    add(ajuste,ajuste>4?"linha curta melhor":ajuste<-4?"linha curta pior":"");
+  }
+  if(moment.regime==="QUENTE")add(10,"momento quente");
+  if(moment.regime==="MELHORANDO")add(6,"momento melhorando");
+  if(moment.regime==="FRIO")add(-14,"momento frio");
+  if(moment.regime==="PIORANDO")add(-8,"momento piorando");
+  if(ctx.hour?.tag==="HORARIO QUENTE")add(8,"horario quente");
+  if(ctx.hour?.tag==="HORARIO FRIO")add(-7,"horario frio");
+  if(ctx.band?.cold)add(-12,"odd fria");
+  if(ctx.odd&&Number.isFinite(ctx.odd.p)&&Number.isFinite(moment.p120)&&ctx.odd.p>=moment.p120+8)add(7,"faixa odd acima media");
+  if(ctx.team&&Number.isFinite(ctx.team.p)&&Number.isFinite(moment.p120)&&ctx.team.p>=moment.p120+8)add(7,"times acima media");
+  if(Number.isFinite(ctx.evGale)){
+    if(ctx.evGale>10)add(10,"EV gale bom");
+    else if(ctx.evGale>0)add(6,"EV gale positivo");
+    else if(ctx.evGale<-25)add(-10,"EV gale ruim");
+  }
+  if(ctx.cycle&&ctx.cycle.current==="RED"&&!best.topo&&(best.confirmadoFundo||best.abaixoEq))add(Math.min(12,ctx.cycle.pressao/8),"pressao com zona boa");
+  const gale=oneGaleStats(g.market);
+  if(Number.isFinite(gale.p)){
+    if(gale.p>=58)add(10,"1 gale forte");
+    else if(gale.p>=48)add(5,"1 gale aceitavel");
+    else if(gale.p<38)add(-16,"1 gale fraco");
+  }
+  if(Number.isFinite(gale.avgDist)&&gale.avgDist>3.2)add(-12,"green longe demais");
+  if(ctx.coldOdd)add(-10,"odd fria geral");
+  s=Math.max(0,Math.min(100,s));
+  const threshold=moment.threshold;
+  const status=s>=threshold?"IA ENTRAR":s>=threshold-12?"IA OBSERVAR":"IA PASSAR";
+  return {score:Math.round(s),threshold,status,moment,gale,motivos:motivos.filter(Boolean).slice(0,5)};
+}
+function adaptiveText(ai){
+  if(!ai)return "IA: sem base";
+  const m=ai.moment;
+  const fmt=v=>Number.isFinite(v)?v.toFixed(1):"-";
+  return `IA ${ai.score}/${ai.threshold} ${ai.status}<br>Momento ${m.regime}: 30j ${fmt(m.p30)} | 60j ${fmt(m.p60)} | 120j ${fmt(m.p120)} | tendencia ${fmt(m.trend)}<br>${oneGaleText(ai.gale)}${ai.motivos?.length?`<br>Motivos: ${ai.motivos.map(esc).join(" | ")}`:""}`;
+}
 function scoreModelForGame(game,m){
   const names=teamNames(game.name);
   const oddAtual=Number.isFinite(game.odd)?game.odd:null;
@@ -943,6 +1022,56 @@ function teamDetailText(game,m){
   const aCasa=sidePayPct(p[0],m,"casa"),aFora=sidePayPct(p[0],m,"fora"),bCasa=sidePayPct(p[1],m,"casa"),bFora=sidePayPct(p[1],m,"fora");
   return `Casa ${esc(p[0])}: casa ${fmtStat(aCasa)} | fora ${fmtStat(aFora)}<br>Fora ${esc(p[1])}: casa ${fmtStat(bCasa)} | fora ${fmtStat(bFora)}`;
 }
+function teamWindowRank(team,m,hours){
+  const nm=esc(team).toLowerCase();
+  const rows=RESULTS_CACHE.filter(r=>r.score&&resultAge(r)<=hours*60&&paysMarket(r.score,m)!==null);
+  const map={};
+  rows.forEach(r=>{
+    teamNames(r.name).forEach(t=>{
+      if(!t)return;
+      if(!map[t])map[t]={team:t,g:0,j:0,p:0};
+      map[t].j++;
+      if(paysMarket(r.score,m))map[t].g++;
+    });
+  });
+  const list=Object.values(map).filter(x=>x.j>=2).map(x=>({...x,p:x.g/x.j*100})).sort((a,b)=>b.p-a.p||b.j-a.j);
+  const idx=list.findIndex(x=>x.team===nm);
+  if(idx<0){
+    const own=map[nm];
+    return own?`${own.g}/${own.j} ${(own.g/own.j*100).toFixed(1)}% sem rank`:"sem base";
+  }
+  const x=list[idx];
+  return `#${idx+1}/${list.length} ${x.g}/${x.j} ${x.p.toFixed(1)}%`;
+}
+function teamMomentRankText(game,m){
+  const p=teamNames(game.name);
+  if(p.length<2)return "Ranking 3/6/12h: sem times";
+  const line=t=>`${esc(t)}: 3h ${teamWindowRank(t,m,3)} | 6h ${teamWindowRank(t,m,6)} | 12h ${teamWindowRank(t,m,12)}`;
+  return `Ranking momento ${esc(m.name)}:<br>${line(p[0])}<br>${line(p[1])}`;
+}
+function oneGaleStats(m){
+  const hist=resultHistoryForMarket(m).slice(0,260);
+  let red=0,total=0,hit=0,distSum=0,distHits=0;
+  for(let i=0;i<hist.length;i++){
+    if(hist[i].green){red=0;continue;}
+    red++;
+    const n1=hist[i+1],n2=hist[i+2];
+    if(red>=2){
+      total++;
+      if(n1?.green||n2?.green)hit++;
+      for(let d=1;d<=8&&i+d<hist.length;d++){
+        if(hist[i+d].green){distSum+=d;distHits++;break;}
+      }
+    }
+  }
+  return {total,hit,p:total?hit/total*100:null,avgDist:distHits?distSum/distHits:null};
+}
+function oneGaleText(s){
+  if(!s||!s.total)return "1 gale: sem base";
+  const p=Number.isFinite(s.p)?s.p.toFixed(1):"-";
+  const d=Number.isFinite(s.avgDist)?s.avgDist.toFixed(1):"-";
+  return `1 gale historico: ${s.hit}/${s.total} ${p}% | distancia media green ${d} jogos`;
+}
 function statusPayStats(m){
   const items=[];
   RESULTS_CACHE.filter(r=>r.score).slice().sort((a,b)=>resultAge(a)-resultAge(b)||a.top-b.top||a.idx-b.idx).slice(0,400).forEach(r=>{
@@ -1012,7 +1141,7 @@ function analysisForGame(g,series){
     ...r,
     cur:r.p,
     ev:r.p===null?null:(r.p/100*g.odd-1)*100,
-    fundo:r.fundo30||r.fundoMin
+    fundo:r.confirmadoFundo
   }));
   const reads=resultReads;
   const valid=reads.filter(r=>r.ready);
@@ -1042,6 +1171,10 @@ function analysisForGame(g,series){
   if(band&&band.cold)score-=10;
   if(hour&&hour.tag==="HORARIO QUENTE")score+=8;
   if(hour&&hour.tag==="HORARIO FRIO")score-=6;
+  if(best?.viradaFundo)score+=15;
+  if(best?.abaixoEq)score+=5;
+  if(best?.topo)score-=30;
+  if(best?.caindoTopo)score-=15;
   if(minHits.some(r=>r.w>=480))score+=10;
   const strongBase=(team&&team.p>=50)||(odd&&odd.p>=50)||(!team&&!odd&&prob!==null);
   const coldOdd=(odd&&odd.j>=CONFIG.minOddSample&&odd.p<CONFIG.minOddPct)||(band&&band.cold);
@@ -1050,9 +1183,11 @@ function analysisForGame(g,series){
   if(score<45&&prob!==null&&prob>=45&&!coldOdd)score=45;
   if(score<45&&evGale!==null&&evGale>-15&&!coldOdd)score=45;
   if(coldOdd)score=Math.min(score,44);
+  if(best?.topo)score=Math.min(score,34);
   const status=score>=70?"ENTRAR":score>=45?"OBSERVAR":"PASSAR";
   const motivo=coldOdd?"ODD FRIA":status;
-  return {reads,best,bestEv,team,odd,cycle,band,hour,prob,fairOdd,ev,evGale,score:Math.round(score),status,motivo,coldOdd,valueOk};
+  const ia=adaptiveSignalForGame(g,{best,team,odd,cycle,band,hour,evGale,coldOdd});
+  return {reads,best,bestEv,team,odd,cycle,band,hour,ia,prob,fairOdd,ev,evGale,score:Math.round(score),status,motivo,coldOdd,valueOk};
 }
 function analyze(){
   const games=readGridGames();
@@ -1088,14 +1223,15 @@ function notifyFundo(series,games=[]){
   const rows=calcResultWindows(m);
   const futuros=games
     .map(g=>({...g,diff:minutesUntil(g.time)}))
-    .filter(g=>Number.isFinite(g.diff)&&g.diff>=1&&g.diff<=12);
+    .filter(g=>Number.isFinite(g.diff)&&g.diff>=2&&g.diff<=7);
   if(!futuros.length){
     let state=storeGet(ALERT_STATE_STORE,"{}");
     state[`${scope}|SEM_FUTURO`]={at:new Date().toISOString()};
     storeSet(ALERT_STATE_STORE,state);
     return;
   }
-  const proximo=futuros.sort((a,b)=>a.diff-b.diff)[0];
+  const futurosOrdenados=futuros.sort((a,b)=>a.diff-b.diff);
+  const proximo=futurosOrdenados[0];
   let state=storeGet(ALERT_STATE_STORE,"{}");
   let log=storeGet(ALERT_LOG_STORE,"[]");
   if(scope!==LAST_ALERT_SCOPE){
@@ -1103,7 +1239,7 @@ function notifyFundo(series,games=[]){
     rows.forEach(f=>{
       if(!f.ready||f.j<f.w)return;
       const k=`${scope}|${f.w}`;
-      state[k]={hit:!!f.fundoMin,p:f.p,armed:false,at:new Date().toISOString(),firstHitAt:f.fundoMin?new Date().toISOString():null};
+      state[k]={hit:!!f.confirmadoFundo,p:f.p,armed:false,at:new Date().toISOString(),firstHitAt:f.confirmadoFundo?new Date().toISOString():null};
     });
     storeSet(ALERT_STATE_STORE,state);
     return;
@@ -1112,55 +1248,56 @@ function notifyFundo(series,games=[]){
   const now=Date.now();
   rows.forEach(f=>{
     if(!f.ready||f.j<f.w)return;
-    const hit=!!f.fundoMin;
+    const hit=!!f.confirmadoFundo;
     const k=`${scope}|${f.w}`;
     const prev=state[k]||{hit:false,armed:true,p:null};
     if(!hit){state[k]={hit:false,p:f.p,armed:true,at:new Date().toISOString()};return;}
     const piorou=prev.hit&&Number.isFinite(f.p)&&Number.isFinite(prev.p)&&f.p<prev.p-CONFIG.tol;
     const firstHitAt=prev.firstHitAt||new Date().toISOString();
     const lastAlert=Date.parse(prev.alertAt||firstHitAt||0)||0;
-    const lembrete=prev.hit&&(f.w===120||f.w===240)&&Number.isFinite(f.p)&&Number.isFinite(f.min)&&f.p<=f.min+CONFIG.tol&&(now-lastAlert>=18*60*1000);
+    const lembrete=false;
     const shouldAlert=(prev.armed&&!prev.hit)||piorou||lembrete;
     state[k]={hit:true,p:f.p,armed:false,at:new Date().toISOString(),firstHitAt,alertAt:shouldAlert?new Date().toISOString():prev.alertAt};
     if(!shouldAlert)return;
     fired.push(f);
   });
-  const movimento=games
-    .map(g=>({...g,diff:minutesUntil(g.time)}))
-    .filter(g=>Number.isFinite(g.diff)&&g.diff>=1&&g.diff<=12)
-    .map(g=>({g,an:g.analysis||analysisForGame(g,series)}))
-    .filter(x=>{
-      const c=x.an.cycle;
-      const press=c&&c.current==="RED"?c.pressao:0;
-      const fundo=x.an.reads.some(r=>r.ready&&r.fundoMin&&(r.w===120||r.w===240));
-      const horarioQuente=x.an.hour&&x.an.hour.tag==="HORARIO QUENTE";
-      const galeOk=Number.isFinite(x.an.evGale)&&x.an.evGale>-20;
-      return press>=55&&(fundo||horarioQuente||galeOk);
-    })
-    .sort((a,b)=>(b.an.cycle?.pressao||0)-(a.an.cycle?.pressao||0))[0];
-  if(movimento){
-    const k=`${scope}|MOVIMENTO`;
-    const prev=state[k]||{};
+  const iaFired=[];
+  const iaPick=futurosOrdenados.map(g=>{
+    const an=g.analysis||analysisForGame(g,series);
+    return {g,an};
+  }).filter(x=>{
+    const ia=x.an.ia;
+    if(!ia||!Number.isFinite(ia.score)||!Number.isFinite(ia.threshold))return false;
+    if(x.an.best?.topo)return false;
+    if(x.an.coldOdd&&ia.score<ia.threshold+8)return false;
+    if(ia.gale&&Number.isFinite(ia.gale.p)&&ia.gale.p<38)return false;
+    if(ia.gale&&Number.isFinite(ia.gale.avgDist)&&ia.gale.avgDist>3.5)return false;
+    return ia.score>=ia.threshold&&ia.status==="IA ENTRAR";
+  }).sort((a,b)=>b.an.ia.score-a.an.ia.score||a.g.diff-b.g.diff)[0];
+  if(iaPick){
+    const ik=`${scope}|IA|${iaPick.g.time}|${iaPick.g.name}`;
+    const prev=state[ik]||{};
     const last=Date.parse(prev.alertAt||0)||0;
-    if(now-last>=12*60*1000){
-      state[k]={alertAt:new Date().toISOString(),time:movimento.g.time,name:movimento.g.name,pressao:movimento.an.cycle?.pressao||0};
-      fired.push({movimento:true,game:movimento.g,an:movimento.an});
+    if(now-last>=9*60*1000){
+      state[ik]={alertAt:new Date().toISOString(),score:iaPick.an.ia.score,threshold:iaPick.an.ia.threshold};
+      iaFired.push(iaPick);
     }
   }
   storeSet(ALERT_STATE_STORE,state);
-  if(!fired.length)return;
+  if(!fired.length&&!iaFired.length)return;
   if(Date.now()-LAST_ALERT_TS<90000)return;
   LAST_ALERT_TS=Date.now();
   beep();
-  const mins=fired.filter(f=>!f.movimento);
-  const movs=fired.filter(f=>f.movimento);
-  const resumoMin=mins.map(f=>`${f.w}: ${f.g}/${f.j} ${f.p.toFixed(1)}% min ${Number.isFinite(f.min)?f.min.toFixed(1):"-"}%`).join(" | ");
-  const resumoMov=movs.map(f=>`MOV ${f.game.time} ${f.game.name} pressao ${(f.an.cycle?.pressao||0).toFixed(0)} score ${f.an.score}`).join(" | ");
-  const tipo=mins.length?"BATEU MINIMA":"MOVIMENTO POSITIVO";
-  const alvo=proximo?`Prox ${proximo.time} ${proximo.name} em ${proximo.diff}m`:"";
-  const msg=`${liga} | ${m.name} | ${agora} | ${alvo} | ${[resumoMin,resumoMov].filter(Boolean).join(" | ")}`;
-  log.push({quando:new Date().toISOString(),hora:agora,liga,mercado:m.name,proximo:proximo?{time:proximo.time,name:proximo.name,diff:proximo.diff,odd:proximo.odd}:null,janelas:mins.map(f=>({janela:f.w,atual:f.p,minima:f.min,g:f.g,j:f.j})),movimentos:movs.map(f=>({time:f.game.time,name:f.game.name,odd:f.game.odd,pressao:f.an.cycle?.pressao||0,score:f.an.score,status:f.an.status})),tipo});
-  if("Notification" in window&&Notification.permission==="granted")new Notification("BBTips: minima",{body:msg});
+  const mins=fired;
+  const resumoMin=mins.map(f=>`${f.w}: ${f.g}/${f.j} ${f.p.toFixed(1)}% min ${Number.isFinite(f.min)?f.min.toFixed(1):"-"} eq ${Number.isFinite(f.media)?f.media.toFixed(1):"-"} ${f.zona}`).join(" | ");
+  const resumoIa=iaFired.map(x=>`IA ${x.an.ia.score}/${x.an.ia.threshold} ${x.g.time} ${x.g.name} @${x.g.odd.toFixed(2)} ${x.an.ia.moment.regime}`).join(" | ");
+  const tipo=mins.some(f=>f.viradaFundo)?"VIRADA DO FUNDO":mins.length?"BATEU FUNDO":"IA ADAPTATIVA";
+  const alvo=iaFired[0]?.g||proximo;
+  const alvoTxt=alvo?`Prox ${alvo.time} ${alvo.name} em ${alvo.diff}m`:"";
+  const msg=`${liga} | ${m.name} | ${agora} | ${alvoTxt}${resumoMin?` | ${resumoMin}`:""}${resumoIa?` | ${resumoIa}`:""}`;
+  log.push({quando:new Date().toISOString(),hora:agora,liga,mercado:m.name,proximo:alvo?{time:alvo.time,name:alvo.name,diff:alvo.diff,odd:alvo.odd}:null,janelas:mins.map(f=>({janela:f.w,atual:f.p,minima:f.min,equilibrio:f.media,maxima:f.max,zona:f.zona,g:f.g,j:f.j})),ia:iaFired.map(x=>({score:x.an.ia.score,threshold:x.an.ia.threshold,status:x.an.ia.status,motivos:x.an.ia.motivos,game:{time:x.g.time,name:x.g.name,odd:x.g.odd}})),tipo});
+  const titulo=tipo==="IA ADAPTATIVA"?"BBTips: IA":"BBTips: minima";
+  if("Notification" in window&&Notification.permission==="granted")new Notification(titulo,{body:msg});
   else if("Notification" in window&&Notification.permission!=="denied")Notification.requestPermission();
   storeSet(ALERT_LOG_STORE,log.slice(-50));
 }
@@ -1169,9 +1306,9 @@ function gamesTable(games,series){
   return `<table><tr><th>Horario</th><th>Jogo</th><th>Mercado</th><th>Odd</th><th>Status</th><th>Probabilidade</th><th>Times/Odd pagante</th><th>Linha 120/240/480/960</th></tr>${games.map(g=>{
     const an=g.analysis||analysisForGame(g,series);
     const reads=an.reads.map(r=>{
-      const cls=(r.fundo30||r.fundoMin)?"ok":r.ready?"warn":"bad";
-      const tag=r.fundo30?" <30":r.fundoMin?" MINIMA":"";
-      return `<span class="${cls}">${r.w}: ${r.ready?`${r.g}/${r.j} ${r.p.toFixed(1)}% min ${r.min.toFixed(1)}${tag} EV ${Number.isFinite(r.ev)?r.ev.toFixed(1):"-"}`:`parcial ${r.g}/${r.j} de ${r.w}`}</span>`;
+      const cls=(r.viradaFundo||r.estabilizouFundo)?"ok":r.topo||r.fundoSemConfirmacao?"bad":r.ready?"warn":"bad";
+      const tag=r.viradaFundo?" VIRADA":r.estabilizouFundo?" FUNDO OK":r.fundoSemConfirmacao?" FUNDO SEM CONF":r.fundo30?" <30":r.topo?" TOPO":"";
+      return `<span class="${cls}">${r.w}: ${r.ready?`${r.g}/${r.j} ${r.p.toFixed(1)}% min ${r.min.toFixed(1)} eq ${Number.isFinite(r.media)?r.media.toFixed(1):"-"} max ${Number.isFinite(r.max)?r.max.toFixed(1):"-"} ${r.zona}${tag} EV ${Number.isFinite(r.ev)?r.ev.toFixed(1):"-"}`:`parcial ${r.g}/${r.j} de ${r.w}`}</span>`;
     }).join("<br>");
     const cls=an.status==="ENTRAR"?"ok":an.status==="OBSERVAR"?"warn":"bad";
     const prob=an.prob===null?"-":`${an.prob.toFixed(1)}%`;
@@ -1184,8 +1321,9 @@ function gamesTable(games,series){
     const faixa=oddBandText(an.band);
     const horario=hourStatsText(an.hour);
     const liga=ligaStatsText(g.market);
+    const ia=adaptiveText(an.ia);
     const scorePull=scorePullText(scoreModelForGame(g,g.market));
-    return `<tr><td>${esc(g.time)}</td><td>${esc(g.name)}</td><td>${esc(g.market.name)}</td><td>${g.odd.toFixed(2)}</td><td class="${cls}">${esc(an.motivo)}<br>Score ${an.score}</td><td>Prob real ${prob}<br>Odd justa ${fair}<br>EV ${ev}<br>EV gale ${evG}<br>${ciclo}<br>${faixa}<br>${horario}<br>${liga}</td><td>Times geral: ${team}<br>${teamDetailText(g,g.market)}<br>Odd: ${odd}<br>Placar puxa: ${scorePull}</td><td>${reads}</td></tr>`;
+    return `<tr><td>${esc(g.time)}</td><td>${esc(g.name)}</td><td>${esc(g.market.name)}</td><td>${g.odd.toFixed(2)}</td><td class="${cls}">${esc(an.motivo)}<br>Score ${an.score}<br>${ia}</td><td>Prob real ${prob}<br>Odd justa ${fair}<br>EV ${ev}<br>EV gale ${evG}<br>${ciclo}<br>${faixa}<br>${horario}<br>${liga}</td><td>Times geral: ${team}<br>${teamDetailText(g,g.market)}<br>${teamMomentRankText(g,g.market)}<br>Odd: ${odd}<br>Placar puxa: ${scorePull}</td><td>${reads}</td></tr>`;
   }).join("")}</table>`;
 }
 function signalsBox(signals){
