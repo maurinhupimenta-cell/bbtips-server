@@ -13,7 +13,7 @@ clearInterval(window[TIMER]);
 ["BBTIPS_FINAL_ROBO_TIMER","BBTIPS_API_ALERTAS_TIMER","BBTIPS_INTERCEPTA_API_TIMER","BBTIPS_PRO_TRADER_TIMER","HB_MULTI_TIMER"].forEach(k=>{try{clearInterval(window[k])}catch(e){}});
 ["bbtips-api-alertas","bbtips-intercepta-api","hb-multi","hb-tips-scanner"].forEach(id=>document.getElementById(id)?.remove());
 
-const CONFIG={market:"over25",tol:0.8,minEV:0,minProb:52,minOddPct:45,minOddSample:8,maxProximos:6,intervalMs:10000,windows:[120,240,480,960],ligas:[1,2,3,4,5,6],ligaAuto:true,horas:"Horas3",filtros:"o15,o25,u25,ambs,ambn,o35,u15,u35"};
+const CONFIG={market:"over25",tol:0.8,minEV:0,minProb:52,minOddPct:45,minOddSample:8,maxProximos:6,rankHoras:6,intervalMs:10000,windows:[120,240,480,960],ligas:[1,2,3,4,5,6],ligaAuto:true,horas:"Horas3",filtros:"o15,o25,u25,ambs,ambn,o35,u15,u35"};
 let PANEL_HOVER=false;
 let TOOLTIP_SERIES=[];
 let RESULTS_CACHE=[];
@@ -1118,19 +1118,21 @@ function rankLine(list,type){
 function marketRankingBox(m){
   const t3=teamMarketRanking(m,3,5),t6=teamMarketRanking(m,6,5),t12=teamMarketRanking(m,12,5);
   const odds=oddMarketRanking(m,10);
-  return `<div class="sig"><b class="ok">Ranking do mercado ${esc(m.name)}</b><br><b>Ranking dos times 6h:</b> ${rankLine(t6,"team")}<br>Ranking dos times 3h: ${rankLine(t3,"team")}<br>Ranking dos times 12h: ${rankLine(t12,"team")}<br>Ranking das odds fixas: ${rankLine(odds,"odd")}</div>`;
+  const chosen=CONFIG.rankHoras===3?t3:CONFIG.rankHoras===12?t12:t6;
+  return `<div class="sig"><b class="ok">Ranking do mercado ${esc(m.name)}</b><br><b>Ranking escolhido ${CONFIG.rankHoras}h:</b> ${rankLine(chosen,"team")}<br>Ranking dos times 3h: ${rankLine(t3,"team")}<br>Ranking dos times 6h: ${rankLine(t6,"team")}<br>Ranking dos times 12h: ${rankLine(t12,"team")}<br>Ranking das odds fixas: ${rankLine(odds,"odd")}</div>`;
 }
 function gameRankText(game,m){
   const p=teamNames(game.name);
-  const t12=teamMarketRanking(m,12,80);
+  const horas=CONFIG.rankHoras===3||CONFIG.rankHoras===12?CONFIG.rankHoras:6;
+  const rank=teamMarketRanking(m,horas,80);
   const place=t=>{
-    const i=t12.findIndex(x=>x.name===t);
-    return i>=0?`#${i+1} ${t12[i].g}/${t12[i].j} ${t12[i].p.toFixed(1)}%`:"sem rank 12h";
+    const i=rank.findIndex(x=>x.name===t);
+    return i>=0?`#${i+1} ${rank[i].g}/${rank[i].j} ${rank[i].p.toFixed(1)}%`:`sem rank ${horas}h`;
   };
   const odds=oddMarketRanking(m,80);
   const oi=odds.findIndex(x=>Math.abs(Number(x.odd)-game.odd)<=0.05);
   const oTxt=oi>=0?`Odd atual #${oi+1} @${odds[oi].odd} ${odds[oi].g}/${odds[oi].j} ${odds[oi].p.toFixed(1)}%`:"Odd atual sem rank";
-  return `${p[0]?`Rank ${esc(p[0])}: ${place(p[0])}<br>`:""}${p[1]?`Rank ${esc(p[1])}: ${place(p[1])}<br>`:""}${oTxt}`;
+  return `${p[0]?`Rank ${horas}h ${esc(p[0])}: ${place(p[0])}<br>`:""}${p[1]?`Rank ${horas}h ${esc(p[1])}: ${place(p[1])}<br>`:""}${oTxt}`;
 }
 function oneGaleStats(m){
   const hist=resultHistoryForMarket(m).slice(0,260);
@@ -1504,8 +1506,9 @@ function exportHistory(){
   const fundoTxt=fundos.length?` | FUNDO ${fundos.map(f=>`${f.w}:${f.p.toFixed(1)}%`).join(" ")}`:"";
   const ligaAtual=activeLiga();
   const opts=MARKETS.map(m=>`<option value="${m.key}" ${m.key===CONFIG.market?"selected":""}>${m.name}</option>`).join("");
+  const rankOpts=[3,6,12].map(h=>`<option value="${h}" ${CONFIG.rankHoras===h?"selected":""}>${h}h</option>`).join("");
   P.innerHTML=`<div class="top"><b>BBTips Robo | ${new Date().toLocaleTimeString()} | Liga ${ligaAtual||"auto"} | Mercado ${esc(market().name)} | API ${API_ROWS.length} | Resultados ${RESULTS_CACHE.length} | Proximos ${a.games.length} | Sinais ${a.signals.length}${fundoTxt}</b>
-  <span>Mercado <select id="rb-market">${opts}</select> EV+ <input id="rb-ev" value="${CONFIG.minEV}"> Prob <input id="rb-prob" value="${CONFIG.minProb}"> OddFria% <input id="rb-cold" value="${CONFIG.minOddPct}"> Prox <input id="rb-maxprox" value="${CONFIG.maxProximos}"> Tol <input id="rb-tol" value="${CONFIG.tol}">
+  <span>Mercado <select id="rb-market">${opts}</select> Rank <select id="rb-rank">${rankOpts}</select> EV+ <input id="rb-ev" value="${CONFIG.minEV}"> Prob <input id="rb-prob" value="${CONFIG.minProb}"> OddFria% <input id="rb-cold" value="${CONFIG.minOddPct}"> Prox <input id="rb-maxprox" value="${CONFIG.maxProximos}"> Tol <input id="rb-tol" value="${CONFIG.tol}">
   <button id="rb-api">API</button><button id="rb-hist">Histï¿½rico</button><button id="rb-scan">Atualizar</button><button id="rb-som">Som</button><button id="rb-min">Minimizar</button><button id="rb-close">Fechar</button></span></div>
   <div class="body">
     <h3>Proximos jogos</h3>${gamesTable(a.games,a.series)}
@@ -1515,6 +1518,7 @@ function exportHistory(){
     <h3>Linha calculada pelos resultados fechados</h3>${trendBox(a.series)}
   </div>`;
   document.getElementById("rb-market").onchange=e=>{CONFIG.market=e.target.value;draw()};
+  document.getElementById("rb-rank").onchange=e=>{CONFIG.rankHoras=Number(e.target.value)||6;draw()};
   document.getElementById("rb-ev").onchange=e=>{CONFIG.minEV=Number(e.target.value)||0;draw()};
   document.getElementById("rb-prob").onchange=e=>{CONFIG.minProb=Number(e.target.value)||52;draw()};
   document.getElementById("rb-cold").onchange=e=>{CONFIG.minOddPct=Number(e.target.value)||45;draw()};
