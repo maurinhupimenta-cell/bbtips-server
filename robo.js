@@ -13,7 +13,7 @@ clearInterval(window[TIMER]);
 ["BBTIPS_FINAL_ROBO_TIMER","BBTIPS_API_ALERTAS_TIMER","BBTIPS_INTERCEPTA_API_TIMER","BBTIPS_PRO_TRADER_TIMER","HB_MULTI_TIMER"].forEach(k=>{try{clearInterval(window[k])}catch(e){}});
 ["bbtips-api-alertas","bbtips-intercepta-api","hb-multi","hb-tips-scanner"].forEach(id=>document.getElementById(id)?.remove());
 
-const CONFIG={market:"over25",tol:0.8,minEV:0,minProb:52,minOddPct:45,minOddSample:8,maxProximos:6,rankHoras:6,intervalMs:10000,windows:[120,240,480,960],ligas:[1,2,3,4,5,6],ligaAuto:true,horas:"Horas3",filtros:"o15,o25,u25,ambs,ambn,o35,u15,u35"};
+const CONFIG={market:"over25",tol:0.8,minEV:0,minProb:52,minOddPct:45,minOddSample:8,maxProximos:6,rankHoras:6,ligaManual:0,casaManual:"",intervalMs:10000,windows:[120,240,480,960],ligas:[1,2,3,4,5,6],ligaAuto:true,horas:"Horas3",filtros:"o15,o25,u25,ambs,ambn,o35,u15,u35"};
 let PANEL_HOVER=false;
 let TOOLTIP_SERIES=[];
 let RESULTS_CACHE=[];
@@ -300,26 +300,33 @@ function ligaFromUrl(url){
   }catch(e){return null}
 }
 function activeLiga(){
+  if(Number(CONFIG.ligaManual))return Number(CONFIG.ligaManual);
   if(!CONFIG.ligaAuto)return null;
   const names={express:6,copa:1,euro:2,super:3,premier:4,split:5};
-  let best=null,bestScore=-1;
+  const tabs=[];
   document.querySelectorAll("button,div,span,a,li").forEach(el=>{
     const txt=esc(el.innerText||"").toLowerCase();
     if(!names[txt])return;
     const r=el.getBoundingClientRect?.();
-    if(!r||r.width<30||r.height<15||r.top<0||r.top>innerHeight)return;
+    if(!r||r.width<55||r.height<25||r.top<0||r.top>Math.min(180,innerHeight))return;
     const st=getComputedStyle(el);
     const bg=st.backgroundColor||"";
     const m=bg.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/i);
     const rgb=m?{r:Number(m[1]),g:Number(m[2]),b:Number(m[3])}:null;
-    const blue=rgb?rgb.b-rgb.r+rgb.b-rgb.g:0;
-    const active=(el.className||"").toString().match(/active|selected|ativo/i)?100:0;
-    const score=blue+r.width/10+active;
-    if(score>bestScore){bestScore=score;best=names[txt]}
+    const blue=rgb?Math.max(0,rgb.b-rgb.r)+Math.max(0,rgb.b-rgb.g):0;
+    const bright=rgb?(rgb.r+rgb.g+rgb.b)/3:0;
+    const activeClass=(el.className||"").toString().match(/active|selected|ativo/i)?120:0;
+    const area=Math.min(180,r.width)/3+Math.min(70,r.height);
+    tabs.push({liga:names[txt],txt,score:activeClass+blue+bright/8+area,top:r.top,left:r.left,width:r.width,height:r.height});
   });
-  return best;
+  if(!tabs.length)return null;
+  const rowTop=Math.min(...tabs.map(t=>t.top));
+  const row=tabs.filter(t=>Math.abs(t.top-rowTop)<35);
+  const best=(row.length?row:tabs).sort((a,b)=>b.score-a.score||b.width*b.height-a.width*a.height)[0];
+  return best?.liga||null;
 }
 function activeCasa(){
+  if(CONFIG.casaManual)return CONFIG.casaManual;
   const names=["bet365","betano","kiron","sportingbet"];
   let best="",score=-1;
   document.querySelectorAll("button,div,span,a,li").forEach(el=>{
@@ -1432,44 +1439,14 @@ function notifyFundo(series,games=[]){
   const rows=calcResultWindows(m);
   const futuros=games
     .map(g=>({...g,diff:minutesUntil(g.time)}))
-    .filter(g=>Number.isFinite(g.diff)&&g.diff>=1&&g.diff<=10);
-  if(!futuros.length){
-    let state=storeGet(ALERT_STATE_STORE,"{}");
-    state[`${scope}|SEM_FUTURO`]={at:new Date().toISOString()};
-    storeSet(ALERT_STATE_STORE,state);
-    return;
-  }
+    .filter(g=>Number.isFinite(g.diff)&&g.diff>=1&&g.diff<=8);
+  if(!futuros.length)return;
   const futurosOrdenados=futuros.sort((a,b)=>a.diff-b.diff);
   const proximo=futurosOrdenados[0];
   let state=storeGet(ALERT_STATE_STORE,"{}");
   let log=storeGet(ALERT_LOG_STORE,"[]");
-  if(scope!==LAST_ALERT_SCOPE){
-    LAST_ALERT_SCOPE=scope;
-    rows.forEach(f=>{
-      if(!f.ready||f.j<f.w)return;
-      const k=`${scope}|${f.w}`;
-      state[k]={hit:!!f.alertaOk,p:f.p,armed:false,at:new Date().toISOString(),firstHitAt:f.alertaOk?new Date().toISOString():null};
-    });
-    storeSet(ALERT_STATE_STORE,state);
-    return;
-  }
-  const fired=[];
   const now=Date.now();
-  rows.forEach(f=>{
-    if(!f.ready||f.j<f.w)return;
-    const hit=!!f.alertaOk;
-    const k=`${scope}|${f.w}`;
-    const prev=state[k]||{hit:false,armed:true,p:null};
-    if(!hit){state[k]={hit:false,p:f.p,armed:true,at:new Date().toISOString()};return;}
-    const piorou=prev.hit&&Number.isFinite(f.p)&&Number.isFinite(prev.p)&&f.p<prev.p-CONFIG.tol;
-    const firstHitAt=prev.firstHitAt||new Date().toISOString();
-    const lastAlert=Date.parse(prev.alertAt||firstHitAt||0)||0;
-    const lembrete=false;
-    const shouldAlert=(prev.armed&&!prev.hit)||piorou||lembrete;
-    state[k]={hit:true,p:f.p,armed:false,at:new Date().toISOString(),firstHitAt,alertAt:shouldAlert?new Date().toISOString():prev.alertAt};
-    if(!shouldAlert)return;
-    fired.push(f);
-  });
+  const fired=rows.filter(f=>f.ready&&f.j>=f.w&&f.alertaOk);
   const iaFired=[];
   const iaPick=futurosOrdenados.map(g=>{
     const an=g.analysis||analysisForGame(g,series);
@@ -1494,7 +1471,13 @@ function notifyFundo(series,games=[]){
   }
   storeSet(ALERT_STATE_STORE,state);
   if(!fired.length&&!iaFired.length)return;
-  if(Date.now()-LAST_ALERT_TS<90000)return;
+  const alertKey=`${scope}|${proximo.time}|${proximo.name}|${fired.map(f=>f.w).join(",")}|${iaFired.map(x=>x.g.time).join(",")}`;
+  const prevMain=state[alertKey]||{};
+  const lastMain=Date.parse(prevMain.alertAt||0)||0;
+  if(now-lastMain<25*60*1000)return;
+  state[alertKey]={alertAt:new Date().toISOString()};
+  storeSet(ALERT_STATE_STORE,state);
+  if(Date.now()-LAST_ALERT_TS<70000)return;
   LAST_ALERT_TS=Date.now();
   beep();
   const mins=fired;
@@ -1593,8 +1576,10 @@ function exportHistory(){
   const ligaAtual=activeLiga();
   const opts=MARKETS.map(m=>`<option value="${m.key}" ${m.key===CONFIG.market?"selected":""}>${m.name}</option>`).join("");
   const rankOpts=[3,6,12].map(h=>`<option value="${h}" ${CONFIG.rankHoras===h?"selected":""}>${h}h</option>`).join("");
+  const ligaOpts=[["0","Auto"],["6","Express"],["1","Copa"],["2","Euro"],["3","Super"],["4","Premier"],["5","Split"]].map(([v,n])=>`<option value="${v}" ${String(CONFIG.ligaManual||0)===v?"selected":""}>${n}</option>`).join("");
+  const casaOpts=[["","Auto"],["bet365","Bet365"],["betano","Betano"],["kiron","Kiron"],["sportingbet","SportingBet"]].map(([v,n])=>`<option value="${v}" ${String(CONFIG.casaManual||"")===v?"selected":""}>${n}</option>`).join("");
   P.innerHTML=`<div class="top"><b>BBTips Robo | ${new Date().toLocaleTimeString()} | Liga ${ligaAtual||"auto"} | Mercado ${esc(market().name)} | API ${API_ROWS.length} | Resultados ${RESULTS_CACHE.length} | Proximos ${a.games.length} | Sinais ${a.signals.length}${fundoTxt}</b>
-  <span>Mercado <select id="rb-market">${opts}</select> Rank <select id="rb-rank">${rankOpts}</select> EV+ <input id="rb-ev" value="${CONFIG.minEV}"> Prob <input id="rb-prob" value="${CONFIG.minProb}"> OddFria% <input id="rb-cold" value="${CONFIG.minOddPct}"> Prox <input id="rb-maxprox" value="${CONFIG.maxProximos}"> Tol <input id="rb-tol" value="${CONFIG.tol}">
+  <span>Liga <select id="rb-liga">${ligaOpts}</select> Casa <select id="rb-casa">${casaOpts}</select> Mercado <select id="rb-market">${opts}</select> Rank <select id="rb-rank">${rankOpts}</select> EV+ <input id="rb-ev" value="${CONFIG.minEV}"> Prob <input id="rb-prob" value="${CONFIG.minProb}"> OddFria% <input id="rb-cold" value="${CONFIG.minOddPct}"> Prox <input id="rb-maxprox" value="${CONFIG.maxProximos}"> Tol <input id="rb-tol" value="${CONFIG.tol}">
   <button id="rb-api">API</button><button id="rb-hist">Histï¿½rico</button><button id="rb-scan">Atualizar</button><button id="rb-som">Som</button><button id="rb-min">Minimizar</button><button id="rb-close">Fechar</button></span></div>
   <div class="body">
     <h3>Proximos jogos</h3>${gamesTable(a.games,a.series)}
@@ -1603,6 +1588,8 @@ function exportHistory(){
     <h3>Conferencia dos ultimos resultados</h3>${resultsCheckTable()}
     <h3>Linha calculada pelos resultados fechados</h3>${trendBox(a.series)}
   </div>`;
+  document.getElementById("rb-liga").onchange=e=>{CONFIG.ligaManual=Number(e.target.value)||0;draw()};
+  document.getElementById("rb-casa").onchange=e=>{CONFIG.casaManual=e.target.value||"";draw()};
   document.getElementById("rb-market").onchange=e=>{CONFIG.market=e.target.value;draw()};
   document.getElementById("rb-rank").onchange=e=>{CONFIG.rankHoras=Number(e.target.value)||6;draw()};
   document.getElementById("rb-ev").onchange=e=>{CONFIG.minEV=Number(e.target.value)||0;draw()};
