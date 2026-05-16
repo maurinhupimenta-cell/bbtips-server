@@ -1187,12 +1187,58 @@ function rankLine(list,type){
   if(type==="team")return list.map((x,i)=>`${i+1}. ${esc(x.name)} ${x.g}/${x.j} ${x.p.toFixed(1)}% ${baseTag(x.j)}`).join(" | ");
   return list.map((x,i)=>`${i+1}. @${esc(x.odd)} ${x.g}/${x.j} ${x.p.toFixed(1)}% ${baseTag(x.j)}`).join(" | ");
 }
+function marketTableAliases(m){
+  const map={
+    over15:["over 1.5","over1.5","o15"],
+    over25:["over 2.5","over2.5","o25"],
+    over35:["over 3.5","over3.5","o35"],
+    over5:["over 5","over5","5+"],
+    ambas_sim:["ambas sim","ambas marcam","ambas","ambs"],
+    ambas_nao:["ambas nao","ambas não","ambn"],
+    under15:["under 1.5","under1.5","u15"],
+    under25:["under 2.5","under2.5","u25"],
+    under35:["under 3.5","under3.5","u35"]
+  };
+  return map[m.key]||[m.name.toLowerCase()];
+}
+function normHeader(v){
+  return String(v||"").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,"").replace(/\s+/g," ").trim();
+}
+function officialTeamRanking(m,limit=8){
+  const aliases=marketTableAliases(m).map(normHeader);
+  for(const table of document.querySelectorAll("table")){
+    const rows=[...table.querySelectorAll("tr")];
+    if(rows.length<2)continue;
+    const head=[...rows[0].children].map(c=>normHeader(c.innerText||c.textContent));
+    const equipe=head.findIndex(h=>/equipe|time|team/.test(h));
+    if(equipe<0)continue;
+    const jIdx=head.findIndex(h=>h==="j"||/jogos/.test(h));
+    const qIdx=head.findIndex(h=>/qtd/.test(h)&&aliases.some(a=>h.includes(a)));
+    const pIdx=head.findIndex(h=>/%/.test(h)&&aliases.some(a=>h.includes(a)));
+    if(qIdx<0||pIdx<0)continue;
+    const out=[];
+    rows.slice(1).forEach(tr=>{
+      const cells=[...tr.children].map(c=>esc(c.innerText||c.textContent));
+      const name=cells[equipe];
+      if(!name)return;
+      const g=Number(String(cells[qIdx]||"").replace(",",".").match(/\d+(?:\.\d+)?/)?.[0]);
+      const p=Number(String(cells[pIdx]||"").replace(",",".").match(/\d+(?:\.\d+)?/)?.[0]);
+      let j=jIdx>=0?Number(String(cells[jIdx]||"").replace(",",".").match(/\d+(?:\.\d+)?/)?.[0]):null;
+      if(!Number.isFinite(j)&&Number.isFinite(g)&&Number.isFinite(p)&&p>0)j=Math.round(g/(p/100));
+      if(Number.isFinite(g)&&Number.isFinite(p))out.push({name:normKey(name),g,j:Number.isFinite(j)?j:g,p,official:true});
+    });
+    if(out.length)return out.sort((a,b)=>b.g-a.g||b.p-a.p||b.j-a.j).slice(0,limit);
+  }
+  return [];
+}
 function marketRankingBox(m){
+  const official=officialTeamRanking(m,8);
   const t3=teamMarketRanking(m,3,5),t6=teamMarketRanking(m,6,5),t12=teamMarketRanking(m,12,5);
   const horas=selectedRankHours();
   const odds=oddMarketRanking(m,10,horas);
   const chosen=horas===3?t3:horas===12?t12:t6;
-  return `<div class="sig"><b class="ok">Ranking do mercado ${esc(m.name)}</b><br><b>Ranking escolhido ${horas}h:</b> ${rankLine(chosen,"team")}<br>Ranking dos times 3h: ${rankLine(t3,"team")}<br>Ranking dos times 6h: ${rankLine(t6,"team")}<br>Ranking dos times 12h: ${rankLine(t12,"team")}<br>Ranking das odds fixas ${horas}h: ${rankLine(odds,"odd")}</div>`;
+  const oficialTxt=official.length?`<b>Ranking oficial do site:</b> ${rankLine(official,"team")}<br>`:"<b>Ranking oficial do site:</b> nao encontrei a tabela visivel<br>";
+  return `<div class="sig"><b class="ok">Ranking do mercado ${esc(m.name)}</b><br>${oficialTxt}<b>Ranking calculado ${horas}h:</b> ${rankLine(chosen,"team")}<br>Ranking das odds fixas ${horas}h: ${rankLine(odds,"odd")}</div>`;
 }
 function gameRankText(game,m){
   const p=teamNames(game.name);
@@ -1439,14 +1485,14 @@ function notifyFundo(series,games=[]){
   const rows=calcResultWindows(m);
   const futuros=games
     .map(g=>({...g,diff:minutesUntil(g.time)}))
-    .filter(g=>Number.isFinite(g.diff)&&g.diff>=1&&g.diff<=8);
+    .filter(g=>Number.isFinite(g.diff)&&g.diff>=0&&g.diff<=12);
   if(!futuros.length)return;
   const futurosOrdenados=futuros.sort((a,b)=>a.diff-b.diff);
   const proximo=futurosOrdenados[0];
   let state=storeGet(ALERT_STATE_STORE,"{}");
   let log=storeGet(ALERT_LOG_STORE,"[]");
   const now=Date.now();
-  const fired=rows.filter(f=>f.ready&&f.j>=f.w&&f.alertaOk);
+  const fired=rows.filter(f=>f.ready&&f.j>=f.w&&(f.alertaOk||f.fundoMin||f.fundo30));
   const iaFired=[];
   const iaPick=futurosOrdenados.map(g=>{
     const an=g.analysis||analysisForGame(g,series);
