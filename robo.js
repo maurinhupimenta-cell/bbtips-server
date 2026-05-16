@@ -1093,6 +1093,12 @@ function selectedRankHours(){
   const h=Number(CONFIG.rankHoras);
   return h===3||h===12?h:6;
 }
+function rankMinSample(hours){
+  const h=Number(hours);
+  if(h===3)return 3;
+  if(h===6)return 5;
+  return 8;
+}
 function teamMarketRanking(m,hours,limit=8){
   const map={};
   scopedResultRows(m,hours).forEach(r=>{
@@ -1103,7 +1109,12 @@ function teamMarketRanking(m,hours,limit=8){
       if(paysMarket(r.score,m))map[t].g++;
     });
   });
-  return Object.values(map).filter(x=>x.j>=2).map(x=>({...x,p:x.g/x.j*100})).sort((a,b)=>b.p-a.p||b.j-a.j).slice(0,limit);
+  const min=rankMinSample(hours);
+  return Object.values(map)
+    .filter(x=>x.j>=min&&x.g>0)
+    .map(x=>({...x,p:x.g/x.j*100}))
+    .sort((a,b)=>b.g-a.g||b.p-a.p||b.j-a.j)
+    .slice(0,limit);
 }
 function oddMarketRanking(m,limit=8,hours=null){
   const map={};
@@ -1120,7 +1131,12 @@ function oddMarketRanking(m,limit=8,hours=null){
       if(paid)map[key].g++;
     });
   });
-  return Object.values(map).filter(x=>x.j>=2).map(x=>({...x,p:x.g/x.j*100})).sort((a,b)=>b.p-a.p||b.j-a.j).slice(0,limit);
+  const min=rankMinSample(hours);
+  return Object.values(map)
+    .filter(x=>x.j>=min&&x.g>0)
+    .map(x=>({...x,p:x.g/x.j*100}))
+    .sort((a,b)=>b.g-a.g||b.p-a.p||b.j-a.j)
+    .slice(0,limit);
 }
 function rankLine(list,type){
   if(!list.length)return "sem base";
