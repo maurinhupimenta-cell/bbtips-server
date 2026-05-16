@@ -800,6 +800,26 @@ function resultAge(r){
   if(age<0)age+=1440;
   return age;
 }
+function virtualAgeFrom(ref,r){
+  const hm=parseTime(r.time);
+  if(ref===null||hm===null)return 99999+(r.top||0)+(r.idx||0)/1000;
+  let age=ref-hm;
+  if(age<0)age+=1440;
+  return age;
+}
+function latestVirtualMinute(rows){
+  const vals=rows.map(r=>parseTime(r.time)).filter(v=>v!==null);
+  if(!vals.length)return null;
+  vals.sort((a,b)=>a-b);
+  const realNow=new Date().getHours()*60+new Date().getMinutes();
+  let best=vals[0],bestAge=99999;
+  vals.forEach(v=>{
+    let age=realNow-v;
+    if(age<0)age+=1440;
+    if(age<bestAge){bestAge=age;best=v}
+  });
+  return best;
+}
 function recentPaidResults(){
   const out=[],seen=new Set();
   const mkt=activeMarkets()[0]||market();
@@ -1086,18 +1106,37 @@ function scopedResultRows(m,hours=null){
   const liga=activeLiga(),casa=activeCasa();
   let rows=RESULTS_CACHE.filter(r=>r.score&&paysMarket(r.score,m)!==null&&(!liga||!r.liga||r.liga===liga)&&(!casa||!r.casa||r.casa===casa));
   if(rows.length<30)rows=RESULTS_CACHE.filter(r=>r.score&&paysMarket(r.score,m)!==null&&(!liga||!r.liga||r.liga===liga));
-  if(Number.isFinite(hours))rows=rows.filter(r=>resultAge(r)<=hours*60);
+  if(Number.isFinite(hours)){
+    const ref=latestVirtualMinute(rows);
+    rows=rows.filter(r=>virtualAgeFrom(ref,r)<=hours*60);
+  }
   return rows;
 }
 function selectedRankHours(){
   const h=Number(CONFIG.rankHoras);
   return h===3||h===12?h:6;
 }
-function rankMinSample(hours){
+function rankMinSampleTeam(hours){
   const h=Number(hours);
   if(h===3)return 3;
   if(h===6)return 5;
   return 8;
+}
+function rankMinSampleOdd(hours){
+  const h=Number(hours);
+  if(h===3)return 1;
+  if(h===6)return 2;
+  return 2;
+}
+function baseTag(j){
+  if(j>=10)return "base boa";
+  if(j>=5)return "base media";
+  return "base fraca";
+}
+function rankScore(x){
+  const p=Number.isFinite(x.p)?x.p:0;
+  const base=Math.min(1,x.j/10);
+  return x.g*100+p*base;
 }
 function teamMarketRanking(m,hours,limit=8){
   const map={};
@@ -1109,19 +1148,17 @@ function teamMarketRanking(m,hours,limit=8){
       if(paysMarket(r.score,m))map[t].g++;
     });
   });
-  const min=rankMinSample(hours);
+  const min=rankMinSampleTeam(hours);
   return Object.values(map)
     .filter(x=>x.j>=min&&x.g>0)
     .map(x=>({...x,p:x.g/x.j*100}))
-    .sort((a,b)=>b.g-a.g||b.p-a.p||b.j-a.j)
+    .sort((a,b)=>rankScore(b)-rankScore(a)||b.g-a.g||b.j-a.j||b.p-a.p)
     .slice(0,limit);
 }
 function oddMarketRanking(m,limit=8,hours=null){
   const map={};
   const h=Number(hours);
-  const rows=scopedResultRows(m,null)
-    .filter(r=>!Number.isFinite(h)||resultAge(r)<=h*60)
-    .slice(0,240);
+  const rows=scopedResultRows(m,Number.isFinite(h)?h:null).slice(0,240);
   rows.forEach(r=>{
     const paid=paysMarket(r.score,m);
     oddsForMarket(r.txt,m).forEach(o=>{
@@ -1131,17 +1168,17 @@ function oddMarketRanking(m,limit=8,hours=null){
       if(paid)map[key].g++;
     });
   });
-  const min=rankMinSample(hours);
+  const min=rankMinSampleOdd(hours);
   return Object.values(map)
-    .filter(x=>x.j>=min&&x.g>0)
+    .filter(x=>x.j>=min)
     .map(x=>({...x,p:x.g/x.j*100}))
-    .sort((a,b)=>b.g-a.g||b.p-a.p||b.j-a.j)
+    .sort((a,b)=>rankScore(b)-rankScore(a)||b.g-a.g||b.j-a.j||b.p-a.p||Number(a.odd)-Number(b.odd))
     .slice(0,limit);
 }
 function rankLine(list,type){
   if(!list.length)return "sem base";
-  if(type==="team")return list.map((x,i)=>`${i+1}. ${esc(x.name)} ${x.g}/${x.j} ${x.p.toFixed(1)}%`).join(" | ");
-  return list.map((x,i)=>`${i+1}. @${esc(x.odd)} ${x.g}/${x.j} ${x.p.toFixed(1)}%`).join(" | ");
+  if(type==="team")return list.map((x,i)=>`${i+1}. ${esc(x.name)} ${x.g}/${x.j} ${x.p.toFixed(1)}% ${baseTag(x.j)}`).join(" | ");
+  return list.map((x,i)=>`${i+1}. @${esc(x.odd)} ${x.g}/${x.j} ${x.p.toFixed(1)}% ${baseTag(x.j)}`).join(" | ");
 }
 function marketRankingBox(m){
   const t3=teamMarketRanking(m,3,5),t6=teamMarketRanking(m,6,5),t12=teamMarketRanking(m,12,5);
