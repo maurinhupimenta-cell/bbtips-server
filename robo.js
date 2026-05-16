@@ -612,10 +612,12 @@ function lineRead(series,odd){
 }
 function resultHistoryForMarket(m){
   const liga=activeLiga(),casa=activeCasa();
-  let rows=RESULTS_CACHE.filter(r=>(!liga||!r.liga||r.liga===liga)&&(!casa||!r.casa||r.casa===casa));
-  if(rows.length<30)rows=RESULTS_CACHE.filter(r=>(!liga||!r.liga||r.liga===liga));
+  const valid=r=>r?.score&&paysMarket(r.score,m)!==null;
+  let rows=RESULTS_CACHE.filter(r=>valid(r)&&(!liga||!r.liga||r.liga===liga)&&(!casa||!r.casa||r.casa===casa));
+  if(rows.length<Math.min(120,CONFIG.windows[0]||120))rows=RESULTS_CACHE.filter(r=>valid(r)&&(!liga||!r.liga||r.liga===liga));
+  if(rows.length<Math.min(120,CONFIG.windows[0]||120))rows=RESULTS_CACHE.filter(valid);
   return rows
-    .map(r=>({name:r.name,score:r.score,green:paysMarket(r.score,m),txt:r.txt}))
+    .map(r=>({name:r.name,score:r.score,green:paysMarket(r.score,m),txt:r.txt,liga:r.liga,casa:r.casa,time:r.time}))
     .filter(r=>r.green!==null);
 }
 function visualCycleHistoryForMarket(m){
@@ -764,6 +766,8 @@ function gridResultCells(){
 function refreshResultsCache(){
   const liga=activeLiga();
   const casa=activeCasa();
+  let stored=[];
+  try{stored=storeGet(HIST_STORE,"[]").filter(r=>r&&r.score).map((r,i)=>({...r,top:r.top??50000+i,idx:r.idx??i,fonte:r.fonte||"hist"}))}catch(e){stored=[]}
   const apiHist=API_ROWS.filter(r=>r.score&&!r.future&&(!liga||!r.liga||r.liga===liga)).map((r,i)=>({
     txt:txtFromApiRow(r),
     score:r.score,
@@ -779,13 +783,13 @@ function refreshResultsCache(){
   const dom=allResultCells();
   dom.forEach(r=>{r.liga=liga;r.casa=casa;r.fonte="dom"});
   const seen=new Set();
-  RESULTS_CACHE=[...apiHist,...dom].filter(r=>{
-    const key=`${r.name}|${r.score?.a}-${r.score?.b}`;
+  RESULTS_CACHE=[...apiHist,...dom,...stored].filter(r=>{
+    const key=`${r.liga||""}|${r.casa||""}|${r.time||""}|${r.name}|${r.score?.a}-${r.score?.b}`;
     if(seen.has(key))return false;
     seen.add(key);
     return true;
   }).sort((a,b)=>resultAge(a)-resultAge(b)||a.top-b.top||a.idx-b.idx);
-  try{localStorage.setItem(HIST_STORE,JSON.stringify(RESULTS_CACHE.slice(-800)))}catch(e){try{sessionStorage.setItem(HIST_STORE,JSON.stringify(RESULTS_CACHE.slice(-300)))}catch(x){}};
+  try{localStorage.setItem(HIST_STORE,JSON.stringify(RESULTS_CACHE.slice(0,2000)))}catch(e){try{sessionStorage.setItem(HIST_STORE,JSON.stringify(RESULTS_CACHE.slice(0,600)))}catch(x){}};
   return RESULTS_CACHE;
 }
 function resultAge(r){
@@ -883,9 +887,9 @@ function cycleText(c){
   return `Ciclo: ${c.streak} ${c.current} seguidos | ultimo GREEN ${lg}<br>Media blocos RED ${ar} / GREEN ${ag} | fase ${c.fase} | pressao ${c.pressao.toFixed(0)}`;
 }
 function oddBandText(o){
-  if(!o)return "Faixa odd: sem base";
+  if(!o)return "Odd fixa: sem base";
   const pct=o.p===null?"-":`${o.p.toFixed(1)}%`;
-  return `Odd fixa/grupo ${esc(o.band)}: ${o.g}/${o.j} ${pct}${o.cold?" ODD FRIA":""}`;
+  return `Odd fixa ${esc(o.band)}: ${o.g}/${o.j} ${pct}${o.cold?" ODD FRIA":""}`;
 }
 function hourOf(v){
   const hm=parseTime(v);
@@ -1085,6 +1089,10 @@ function scopedResultRows(m,hours=null){
   if(Number.isFinite(hours))rows=rows.filter(r=>resultAge(r)<=hours*60);
   return rows;
 }
+function selectedRankHours(){
+  const h=Number(CONFIG.rankHoras);
+  return h===3||h===12?h:6;
+}
 function teamMarketRanking(m,hours,limit=8){
   const map={};
   scopedResultRows(m,hours).forEach(r=>{
@@ -1097,9 +1105,13 @@ function teamMarketRanking(m,hours,limit=8){
   });
   return Object.values(map).filter(x=>x.j>=2).map(x=>({...x,p:x.g/x.j*100})).sort((a,b)=>b.p-a.p||b.j-a.j).slice(0,limit);
 }
-function oddMarketRanking(m,limit=8){
+function oddMarketRanking(m,limit=8,hours=null){
   const map={};
-  scopedResultRows(m,null).slice(0,240).forEach(r=>{
+  const h=Number(hours);
+  const rows=scopedResultRows(m,null)
+    .filter(r=>!Number.isFinite(h)||resultAge(r)<=h*60)
+    .slice(0,240);
+  rows.forEach(r=>{
     const paid=paysMarket(r.score,m);
     oddsForMarket(r.txt,m).forEach(o=>{
       const key=o.toFixed(2);
@@ -1117,21 +1129,23 @@ function rankLine(list,type){
 }
 function marketRankingBox(m){
   const t3=teamMarketRanking(m,3,5),t6=teamMarketRanking(m,6,5),t12=teamMarketRanking(m,12,5);
-  const odds=oddMarketRanking(m,10);
-  const chosen=CONFIG.rankHoras===3?t3:CONFIG.rankHoras===12?t12:t6;
-  return `<div class="sig"><b class="ok">Ranking do mercado ${esc(m.name)}</b><br><b>Ranking escolhido ${CONFIG.rankHoras}h:</b> ${rankLine(chosen,"team")}<br>Ranking dos times 3h: ${rankLine(t3,"team")}<br>Ranking dos times 6h: ${rankLine(t6,"team")}<br>Ranking dos times 12h: ${rankLine(t12,"team")}<br>Ranking das odds fixas: ${rankLine(odds,"odd")}</div>`;
+  const horas=selectedRankHours();
+  const odds=oddMarketRanking(m,10,horas);
+  const chosen=horas===3?t3:horas===12?t12:t6;
+  return `<div class="sig"><b class="ok">Ranking do mercado ${esc(m.name)}</b><br><b>Ranking escolhido ${horas}h:</b> ${rankLine(chosen,"team")}<br>Ranking dos times 3h: ${rankLine(t3,"team")}<br>Ranking dos times 6h: ${rankLine(t6,"team")}<br>Ranking dos times 12h: ${rankLine(t12,"team")}<br>Ranking das odds fixas ${horas}h: ${rankLine(odds,"odd")}</div>`;
 }
 function gameRankText(game,m){
   const p=teamNames(game.name);
-  const horas=CONFIG.rankHoras===3||CONFIG.rankHoras===12?CONFIG.rankHoras:6;
+  const horas=selectedRankHours();
   const rank=teamMarketRanking(m,horas,80);
   const place=t=>{
     const i=rank.findIndex(x=>x.name===t);
     return i>=0?`#${i+1} ${rank[i].g}/${rank[i].j} ${rank[i].p.toFixed(1)}%`:`sem rank ${horas}h`;
   };
-  const odds=oddMarketRanking(m,80);
-  const oi=odds.findIndex(x=>Math.abs(Number(x.odd)-game.odd)<=0.05);
-  const oTxt=oi>=0?`Odd atual #${oi+1} @${odds[oi].odd} ${odds[oi].g}/${odds[oi].j} ${odds[oi].p.toFixed(1)}%`:"Odd atual sem rank";
+  const odds=oddMarketRanking(m,80,horas);
+  const oddKey=Number(game.odd).toFixed(2);
+  const oi=odds.findIndex(x=>x.odd===oddKey);
+  const oTxt=oi>=0?`Odd atual #${oi+1} @${odds[oi].odd} ${odds[oi].g}/${odds[oi].j} ${odds[oi].p.toFixed(1)}%`:`Odd atual @${oddKey} sem base ${horas}h`;
   return `${p[0]?`Rank ${horas}h ${esc(p[0])}: ${place(p[0])}<br>`:""}${p[1]?`Rank ${horas}h ${esc(p[1])}: ${place(p[1])}<br>`:""}${oTxt}`;
 }
 function oneGaleStats(m){
@@ -1167,9 +1181,15 @@ function normKey(v){return esc(v).toLowerCase().normalize("NFD").replace(/[\u030
 function predKey(g){return [g.liga||activeLiga()||"",g.casa||activeCasa()||"",g.market?.key||CONFIG.market,g.time||"",normKey(g.name)].join("|")}
 function loadPreds(){return storeGet(PRED_STORE,"[]")}
 function savePreds(list){storeSet(PRED_STORE,list.slice(-500))}
+function strongerStatus(a,b){
+  const rank={PASSAR:0,OBSERVAR:1,ENTRAR:2};
+  return (rank[a]||0)>=(rank[b]||0)?a:b;
+}
 function registerPrediction(g){
   const an=g.analysis;
   if(!an||!["ENTRAR","OBSERVAR"].includes(an.status))return;
+  const diff=minutesUntil(g.time);
+  if(Number.isFinite(diff)&&diff<0)return;
   const list=loadPreds();
   const key=predKey(g);
   let item=list.find(x=>x.key===key&&!x.settled);
@@ -1177,20 +1197,33 @@ function registerPrediction(g){
     item={key,liga:g.liga||activeLiga(),casa:g.casa||activeCasa(),market:g.market.key,marketName:g.market.name,time:g.time,name:g.name,odd:g.odd,status:an.status,score:an.score,createdAt:new Date().toISOString(),settled:false};
     list.push(item);
   }else{
-    item.status=an.status;item.score=an.score;item.odd=g.odd;item.updatedAt=new Date().toISOString();
+    item.status=strongerStatus(item.status,an.status);
+    item.score=Math.max(Number(item.score)||0,Number(an.score)||0);
+    item.odd=g.odd;
+    item.updatedAt=new Date().toISOString();
   }
   savePreds(list);
+}
+function predictionResultRow(x){
+  const xn=normKey(x.name);
+  const xt=String(x.time||"");
+  let rows=RESULTS_CACHE.filter(r=>r.score&&normKey(r.name)===xn);
+  if(x.liga)rows=rows.filter(r=>!r.liga||r.liga===x.liga);
+  if(x.casa)rows=rows.filter(r=>!r.casa||r.casa===x.casa||r.casa==="api");
+  let exact=rows.find(r=>!xt||!r.time||String(r.time)===xt);
+  if(exact)return exact;
+  const target=parseTime(x.time);
+  if(target!==null){
+    rows=rows.map(r=>({r,hm:parseTime(r.time)})).filter(o=>o.hm!==null).sort((a,b)=>Math.abs(a.hm-target)-Math.abs(b.hm-target)).map(o=>o.r);
+    if(rows[0]&&Math.abs((parseTime(rows[0].time)??9999)-target)<=3)return rows[0];
+  }
+  return null;
 }
 function settlePredictions(m){
   const list=loadPreds();
   let changed=false;
   list.filter(x=>!x.settled&&x.market===m.key).forEach(x=>{
-    const row=RESULTS_CACHE.find(r=>{
-      if(x.liga&&r.liga&&x.liga!==r.liga)return false;
-      if(x.casa&&r.casa&&x.casa!==r.casa)return false;
-      if(x.time&&r.time&&String(x.time)!==String(r.time))return false;
-      return normKey(r.name)===normKey(x.name)&&r.score;
-    });
+    const row=predictionResultRow(x);
     if(!row)return;
     x.settled=true;
     x.resultAt=new Date().toISOString();
@@ -1235,13 +1268,13 @@ function teamPayPct(game,m){
   return {g,j:rows.length,p:g/rows.length*100};
 }
 function oddPayPct(game,m){
-  const target=game.odd;
+  const target=Number(game.odd).toFixed(2);
   const rows=RESULTS_CACHE.filter(r=>m.patterns.some(re=>{
     re.lastIndex=0;
     let hit=false,mm;
     while((mm=re.exec(r.txt))){
       const odd=Number(String(mm[1]).replace(",","."));
-      if(Math.abs(odd-target)<=0.05)hit=true;
+      if(Number.isFinite(odd)&&odd.toFixed(2)===target)hit=true;
     }
     return hit;
   }));
