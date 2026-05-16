@@ -98,6 +98,14 @@ function isFuture(v){
   if(diff<-720)diff+=1440;
   return diff>=0&&diff<=720;
 }
+function minutesUntil(v){
+  const hm=parseTime(v);
+  if(hm===null)return null;
+  const d=new Date(),now=d.getHours()*60+d.getMinutes();
+  let diff=hm-now;
+  if(diff<-720)diff+=1440;
+  return diff;
+}
 function oddsForMarket(txt,m){
   const out=[];
   m.patterns.forEach(re=>{
@@ -1078,6 +1086,16 @@ function notifyFundo(series,games=[]){
   const liga=ligaNome(),m=market(),agora=new Date().toLocaleTimeString();
   const scope=`${liga}|${m.key}`;
   const rows=calcResultWindows(m);
+  const futuros=games
+    .map(g=>({...g,diff:minutesUntil(g.time)}))
+    .filter(g=>Number.isFinite(g.diff)&&g.diff>=1&&g.diff<=12);
+  if(!futuros.length){
+    let state=storeGet(ALERT_STATE_STORE,"{}");
+    state[`${scope}|SEM_FUTURO`]={at:new Date().toISOString()};
+    storeSet(ALERT_STATE_STORE,state);
+    return;
+  }
+  const proximo=futuros.sort((a,b)=>a.diff-b.diff)[0];
   let state=storeGet(ALERT_STATE_STORE,"{}");
   let log=storeGet(ALERT_LOG_STORE,"[]");
   if(scope!==LAST_ALERT_SCOPE){
@@ -1108,6 +1126,8 @@ function notifyFundo(series,games=[]){
     fired.push(f);
   });
   const movimento=games
+    .map(g=>({...g,diff:minutesUntil(g.time)}))
+    .filter(g=>Number.isFinite(g.diff)&&g.diff>=1&&g.diff<=12)
     .map(g=>({g,an:g.analysis||analysisForGame(g,series)}))
     .filter(x=>{
       const c=x.an.cycle;
@@ -1137,8 +1157,9 @@ function notifyFundo(series,games=[]){
   const resumoMin=mins.map(f=>`${f.w}: ${f.g}/${f.j} ${f.p.toFixed(1)}% min ${Number.isFinite(f.min)?f.min.toFixed(1):"-"}%`).join(" | ");
   const resumoMov=movs.map(f=>`MOV ${f.game.time} ${f.game.name} pressao ${(f.an.cycle?.pressao||0).toFixed(0)} score ${f.an.score}`).join(" | ");
   const tipo=mins.length?"BATEU MINIMA":"MOVIMENTO POSITIVO";
-  const msg=`${liga} | ${m.name} | ${agora} | ${[resumoMin,resumoMov].filter(Boolean).join(" | ")}`;
-  log.push({quando:new Date().toISOString(),hora:agora,liga,mercado:m.name,janelas:mins.map(f=>({janela:f.w,atual:f.p,minima:f.min,g:f.g,j:f.j})),movimentos:movs.map(f=>({time:f.game.time,name:f.game.name,odd:f.game.odd,pressao:f.an.cycle?.pressao||0,score:f.an.score,status:f.an.status})),tipo});
+  const alvo=proximo?`Prox ${proximo.time} ${proximo.name} em ${proximo.diff}m`:"";
+  const msg=`${liga} | ${m.name} | ${agora} | ${alvo} | ${[resumoMin,resumoMov].filter(Boolean).join(" | ")}`;
+  log.push({quando:new Date().toISOString(),hora:agora,liga,mercado:m.name,proximo:proximo?{time:proximo.time,name:proximo.name,diff:proximo.diff,odd:proximo.odd}:null,janelas:mins.map(f=>({janela:f.w,atual:f.p,minima:f.min,g:f.g,j:f.j})),movimentos:movs.map(f=>({time:f.game.time,name:f.game.name,odd:f.game.odd,pressao:f.an.cycle?.pressao||0,score:f.an.score,status:f.an.status})),tipo});
   if("Notification" in window&&Notification.permission==="granted")new Notification("BBTips: minima",{body:msg});
   else if("Notification" in window&&Notification.permission!=="denied")Notification.requestPermission();
   storeSet(ALERT_LOG_STORE,log.slice(-50));
