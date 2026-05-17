@@ -49,7 +49,7 @@ activateBtn.addEventListener("click", async () => {
     const response = await fetch(`${API_BASE}/api/login`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ user, password })
+      body: JSON.stringify({ username: user, user, password })
     });
 
     const data = await response.json();
@@ -57,7 +57,7 @@ activateBtn.addEventListener("click", async () => {
     if (!data.ok || !data.active || !data.token) {
       await chrome.storage.local.set({ bbtips_active: false, bbtips_user: user, bbtips_token: "" });
       await sendToCurrentTab("BBTIPS_REMOVE");
-      setStatus(data.message || "Login bloqueado ou inválido.", "bad");
+      setStatus(data.message || data.error || "Login bloqueado ou inválido.", "bad");
       return;
     }
 
