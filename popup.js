@@ -54,7 +54,7 @@ activateBtn.addEventListener("click", async () => {
 
     const data = await response.json();
 
-    if (!data.ok || !data.active || !data.token) {
+    if (!data.ok || !data.token) {
       await chrome.storage.local.set({ bbtips_active: false, bbtips_user: user, bbtips_token: "" });
       await sendToCurrentTab("BBTIPS_REMOVE");
       setStatus(data.message || data.error || "Login bloqueado ou inválido.", "bad");
