@@ -1,8 +1,10 @@
-(()=>{
+﻿(()=>{
 const PANEL="bbtips-final-robo";
 const TIMER="BBTIPS_FINAL_ROBO_TIMER";
 const SEEN="BBTIPS_FINAL_ROBO_SEEN";
 const API_STORE="BBTIPS_FINAL_API_ROWS_V2";
+const AGENTE_LOCAL_URL="http://127.0.0.1:8765/ingest";
+let AGENTE_LOCAL_TS=0;
 document.getElementById(PANEL)?.remove();
 document.getElementById(PANEL+"-style")?.remove();
 clearInterval(window[TIMER]);
@@ -211,6 +213,32 @@ function saveApiRows(rows){
   rows.forEach(r=>by[r.key]=r);
   API_ROWS=Object.values(by).slice(-5000);
   localStorage.setItem(API_STORE,JSON.stringify(API_ROWS));
+  sendAgenteLocal(rows);
+}
+function sendAgenteLocal(rows){
+  const now=Date.now();
+  if(!rows.length||now-AGENTE_LOCAL_TS<1500)return;
+  AGENTE_LOCAL_TS=now;
+  try{
+    window.postMessage({type:"BBTIPS_AGENT_ROWS",source:"bbtips_extension",sentAt:now,rows},"*");
+  }catch(e){}
+
+}
+function sendResultadosAgenteLocal(){
+  try{
+    if(!Array.isArray(RESULTS_CACHE)||!RESULTS_CACHE.length)return;
+    const rows=RESULTS_CACHE.filter(r=>r&&r.score&&r.name).slice(-800).map(r=>({
+      key:["result-cache",r.time||"",r.name||"",`${r.score.a}-${r.score.b}`].join("|"),
+      liga:ligaFromUrl(r.api||"")||activeLiga()||null,
+      time:String(r.time||""),
+      name:String(r.name||""),
+      score:r.score,
+      odds:{},
+      future:false,
+      api:"result-cache"
+    }));
+    sendAgenteLocal(rows);
+  }catch(e){}
 }
 function loadApiRows(){
   try{API_ROWS=JSON.parse(localStorage.getItem(API_STORE)||"[]")}catch(e){API_ROWS=[]}
@@ -570,6 +598,33 @@ function globalFundos(series){
 }
 function visualFundos(series){
   return [];
+}
+function pctGreen(arr){
+  if(!arr.length)return null;
+  return arr.filter(x=>x.green).length/arr.length*100;
+}
+function trendUpSignals(){
+  const hist=resultHistoryForMarket(market());
+  if(hist.length<60)return [];
+  const recent15=hist.slice(0,15),recent30=hist.slice(0,30),prev30=hist.slice(30,60);
+  const base120=hist.slice(0,Math.min(120,hist.length));
+  const p15=pctGreen(recent15),p30=pctGreen(recent30),pPrev=pctGreen(prev30),pBase=pctGreen(base120);
+  if([p15,p30,pPrev,pBase].some(v=>!Number.isFinite(v)))return [];
+  const g15=recent15.filter(x=>x.green).length,g30=recent30.filter(x=>x.green).length;
+  const subindo=p15>=p30-1&&p30>=pPrev+6&&p30>=pBase+3&&g15>=1&&g30>=2;
+  const viradaFundo=p15>=pBase+8&&p15>=pPrev+8&&g15>=2;
+  if(!subindo&&!viradaFundo)return [];
+  return [{
+    tipo:viradaFundo?"VIRADA DE FUNDO":"SUBIDA DE TENDENCIA",
+    p15,p30,pPrev,pBase,g15,g30,j:hist.length,
+    tendencia:p30-pPrev,
+    base:pBase
+  }];
+}
+function trendUpBox(){
+  const sinais=trendUpSignals();
+  if(!sinais.length)return "";
+  return sinais.map(s=>`<div class="sig"><b class="ok">${s.tipo}</b> ${esc(market().name)} | 15j ${s.p15.toFixed(1)}% | 30j ${s.g30}/30 ${s.p30.toFixed(1)}% | antes ${s.pPrev.toFixed(1)}% | base ${s.pBase.toFixed(1)}% | tendencia +${s.tendencia.toFixed(1)}</div>`).join("");
 }
 function scoreFromResult(txt){
   const m=String(txt||"").match(/(\d+)\s*[-x]\s*(\d+)/);
@@ -1074,6 +1129,23 @@ function notifyFundo(series){
   });
   localStorage.setItem(SEEN+"_FUNDO",JSON.stringify([...seen].slice(-100)));
 }
+function notifyTrendUp(){
+  const sinais=trendUpSignals();
+  if(!sinais.length)return;
+  let old=[];try{old=JSON.parse(localStorage.getItem(SEEN+"_TRENDUP")||"[]")}catch(e){}
+  const seen=new Set(old);
+  sinais.forEach(s=>{
+    const bucket=Math.floor(s.p30/3)*3;
+    const k=`${activeLiga()||"auto"}|${CONFIG.market}|${s.tipo}|${bucket}|${Math.round(s.pPrev)}`;
+    if(seen.has(k))return;
+    seen.add(k);
+    beep();
+    const msg=`${ligaNome()} | ${market().name} | 15j ${s.p15.toFixed(1)}% | 30j ${s.g30}/30 ${s.p30.toFixed(1)}% | antes ${s.pPrev.toFixed(1)}% | base ${s.pBase.toFixed(1)}%`;
+    if("Notification" in window&&Notification.permission==="granted")new Notification("BBTips: subida de tendencia",{body:msg});
+    else if("Notification" in window&&Notification.permission!=="denied")Notification.requestPermission();
+  });
+  localStorage.setItem(SEEN+"_TRENDUP",JSON.stringify([...seen].slice(-100)));
+}
 function gamesTable(games,series){
   if(!games.length)return "<p class='bad'>Nao achei proximos jogos com odd deste mercado. Clique API ou escolha um mercado que aparece nas odds dos proximos jogos.</p>";
   return `<table><tr><th>Horario</th><th>Jogo</th><th>Mercado</th><th>Odd</th><th>Status</th><th>Probabilidade</th><th>Times/Odd pagante</th><th>Linha 120/240/480/960</th></tr>${games.map(g=>{
@@ -1136,10 +1208,13 @@ function draw(){
   const oldScroll=bodyOld?bodyOld.scrollTop:0;
   const oldPageX=window.scrollX,oldPageY=window.scrollY;
   loadApiRows();
+  sendAgenteLocal(API_ROWS.slice(-1500));
   refreshResultsCache();
+  sendResultadosAgenteLocal();
   const a=analyze();
   notify(a.signals);
   notifyFundo(a.series);
+  notifyTrendUp();
   const fundos=[...globalFundos(a.series),...visualFundos(a.series)];
   const fundoTxt=fundos.length?` | FUNDO ${fundos.map(f=>`${f.w}:${f.p.toFixed(1)}%`).join(" ")}`:"";
   const ligaAtual=activeLiga();
@@ -1148,7 +1223,7 @@ function draw(){
   <span>Mercado <select id="rb-market">${opts}</select> EV+ <input id="rb-ev" value="${CONFIG.minEV}"> Prob <input id="rb-prob" value="${CONFIG.minProb}"> OddFria% <input id="rb-cold" value="${CONFIG.minOddPct}"> Prox <input id="rb-maxprox" value="${CONFIG.maxProximos}"> Tol <input id="rb-tol" value="${CONFIG.tol}">
   <button id="rb-api">API</button><button id="rb-scan">Atualizar</button><button id="rb-som">Som</button><button id="rb-min">Minimizar</button><button id="rb-close">Fechar</button></span></div>
   <div class="body">
-    <h3>Proximos jogos</h3>${marketRankingBox()}${gamesTable(a.games,a.series)}
+    <h3>Proximos jogos</h3>${trendUpBox()}${marketRankingBox()}${gamesTable(a.games,a.series)}
     <h3>Sinais por minima calculada pelos resultados</h3>${signalsBox(a.signals)}
     <h3>Pagamento do mercado aberto</h3>${statusStatsBox()}
     <h3>Conferencia dos ultimos resultados</h3>${resultsCheckTable()}
@@ -1173,3 +1248,6 @@ draw();
 window[TIMER]=setInterval(draw,CONFIG.intervalMs);
 window.BBTipsRobo={analyze,config:CONFIG};
 })();
+
+
+
