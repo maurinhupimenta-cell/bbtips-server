@@ -3,6 +3,7 @@ const PANEL="bbtips-final-robo";
 const TIMER="BBTIPS_FINAL_ROBO_TIMER";
 const SEEN="BBTIPS_FINAL_ROBO_SEEN";
 const API_STORE="BBTIPS_FINAL_API_ROWS_V2";
+const HIST_STORE="BBTIPS_FINAL_RESULTADOS_HIST_V1";
 const AGENTE_LOCAL_URL="http://127.0.0.1:8765/ingest";
 let AGENTE_LOCAL_TS=0;
 document.getElementById(PANEL)?.remove();
@@ -242,6 +243,26 @@ function sendResultadosAgenteLocal(){
 }
 function loadApiRows(){
   try{API_ROWS=JSON.parse(localStorage.getItem(API_STORE)||"[]")}catch(e){API_ROWS=[]}
+}
+function rowScoreText(r){return r?.score?`${r.score.a}-${r.score.b}`:""}
+function resultKey(r){
+  return [
+    r.api?"api":"dom",
+    r.liga||"",
+    String(r.time||""),
+    String(r.name||"").toLowerCase(),
+    rowScoreText(r),
+    String(r.txt||"").replace(/\s+/g," ").slice(-180)
+  ].join("|");
+}
+function loadStoredResults(){
+  try{
+    const rows=JSON.parse(localStorage.getItem(HIST_STORE)||"[]");
+    return Array.isArray(rows)?rows.filter(r=>r&&r.score&&r.name):[];
+  }catch(e){return []}
+}
+function saveStoredResults(rows){
+  try{localStorage.setItem(HIST_STORE,JSON.stringify(rows.slice(0,2500)))}catch(e){}
 }
 function processApiText(url,text){
   if(!/futebolvirtual|Linhas|Colunas|TimeA|TimeB|Odds|Resultado/i.test(String(url)+" "+String(text).slice(0,500)))return;
@@ -603,6 +624,42 @@ function pctGreen(arr){
   if(!arr.length)return null;
   return arr.filter(x=>x.green).length/arr.length*100;
 }
+function emaValues(values,win){
+  if(!values.length)return [];
+  const a=2/(win+1),out=[values[0]];
+  for(let i=1;i<values.length;i++)out.push(a*values[i]+(1-a)*out[out.length-1]);
+  return out;
+}
+function linearSlope(values){
+  if(values.length<2)return 0;
+  const n=values.length,mx=(n-1)/2,my=values.reduce((a,b)=>a+b,0)/n;
+  let num=0,den=0;
+  for(let i=0;i<n;i++){num+=(i-mx)*(values[i]-my);den+=(i-mx)*(i-mx)}
+  return den?num/den:0;
+}
+function rollingPctLine(values,win){
+  const out=[];
+  for(let i=0;i<values.length;i++){
+    const s=values.slice(Math.max(0,i-win+1),i+1);
+    out.push(s.reduce((a,b)=>a+b,0)/s.length*100);
+  }
+  return out;
+}
+function trendMoment(hist){
+  const chron=hist.slice(0,Math.min(120,hist.length)).reverse().map(x=>x.green?1:0);
+  if(chron.length<60)return null;
+  const fast=emaValues(chron,12),slow=emaValues(chron,26);
+  const macd=chron.map((_,i)=>fast[i]-slow[i]);
+  const sig=emaValues(macd,9);
+  const histo=macd.map((v,i)=>v-sig[i]);
+  const line=rollingPctLine(chron,10);
+  const last=histo.length-1;
+  return {
+    macd:macd[last],signal:sig[last],hist:histo[last],prevHist:histo[last-1]??histo[last],
+    histDelta:histo[last]-(histo[last-1]??histo[last]),
+    slope8:linearSlope(line.slice(-8)),slope20:linearSlope(line.slice(-20)),slope40:linearSlope(line.slice(-40))
+  };
+}
 function trendUpSignals(){
   const hist=resultHistoryForMarket(market());
   if(hist.length<60)return [];
@@ -611,20 +668,27 @@ function trendUpSignals(){
   const p15=pctGreen(recent15),p30=pctGreen(recent30),pPrev=pctGreen(prev30),pBase=pctGreen(base120);
   if([p15,p30,pPrev,pBase].some(v=>!Number.isFinite(v)))return [];
   const g15=recent15.filter(x=>x.green).length,g30=recent30.filter(x=>x.green).length;
-  const subindo=p15>=p30-1&&p30>=pPrev+6&&p30>=pBase+3&&g15>=1&&g30>=2;
-  const viradaFundo=p15>=pBase+8&&p15>=pPrev+8&&g15>=2;
-  if(!subindo&&!viradaFundo)return [];
+  const m=trendMoment(hist);
+  if(!m)return [];
+
+  const taxaSubiu=p15>=p30-1&&p30>=pPrev+6&&p30>=pBase+3&&g15>=1&&g30>=2;
+  const fundoVirando=p15>=pBase+8&&p15>=pPrev+8&&g15>=2;
+  const momentoConfirma=m.hist>0&&m.histDelta>0&&m.macd>m.signal&&m.slope8>0&&m.slope20>=0;
+  const subidaEsgotada=(p30>=pBase+3||p30>=pPrev+6)&&(m.hist<=0||m.histDelta<0||m.macd<m.signal||m.slope8<=0);
+
+  if(subidaEsgotada)return [];
+  if(!(taxaSubiu||fundoVirando)||!momentoConfirma)return [];
   return [{
-    tipo:viradaFundo?"VIRADA DE FUNDO":"SUBIDA DE TENDENCIA",
+    tipo:fundoVirando?"VIRADA DE FUNDO CONFIRMADA":"SUBIDA CONFIRMADA",
     p15,p30,pPrev,pBase,g15,g30,j:hist.length,
-    tendencia:p30-pPrev,
-    base:pBase
+    tendencia:p30-pPrev,base:pBase,
+    macd:m.macd,signal:m.signal,hist:m.hist,histDelta:m.histDelta,slope8:m.slope8,slope20:m.slope20
   }];
 }
 function trendUpBox(){
   const sinais=trendUpSignals();
   if(!sinais.length)return "";
-  return sinais.map(s=>`<div class="sig"><b class="ok">${s.tipo}</b> ${esc(market().name)} | 15j ${s.p15.toFixed(1)}% | 30j ${s.g30}/30 ${s.p30.toFixed(1)}% | antes ${s.pPrev.toFixed(1)}% | base ${s.pBase.toFixed(1)}% | tendencia +${s.tendencia.toFixed(1)}</div>`).join("");
+  return sinais.map(s=>`<div class="sig"><b class="ok">${s.tipo}</b> ${esc(market().name)} | 15j ${s.p15.toFixed(1)}% | 30j ${s.g30}/30 ${s.p30.toFixed(1)}% | antes ${s.pPrev.toFixed(1)}% | base ${s.pBase.toFixed(1)}% | MACD ${s.macd.toFixed(3)}/${s.signal.toFixed(3)} | hist ${s.hist.toFixed(3)} subindo</div>`).join("");
 }
 function scoreFromResult(txt){
   const m=String(txt||"").match(/(\d+)\s*[-x]\s*(\d+)/);
@@ -725,19 +789,22 @@ function refreshResultsCache(){
     score:r.score,
     name:r.name,
     time:r.time,
+    liga:r.liga||liga||null,
     top:-10000+i,
     left:0,
     idx:i,
     api:true
   }));
-  const dom=allResultCells();
+  const dom=allResultCells().map(r=>({...r,liga:liga||r.liga||null}));
+  const stored=loadStoredResults().filter(r=>!liga||!r.liga||r.liga===liga);
   const seen=new Set();
-  RESULTS_CACHE=[...apiHist,...dom].filter(r=>{
-    const key=`${r.name}|${r.score?.a}-${r.score?.b}`;
+  RESULTS_CACHE=[...apiHist,...dom,...stored].filter(r=>{
+    const key=resultKey(r);
     if(seen.has(key))return false;
     seen.add(key);
     return true;
   }).sort((a,b)=>resultAge(a)-resultAge(b)||a.top-b.top||a.idx-b.idx);
+  saveStoredResults(RESULTS_CACHE);
   return RESULTS_CACHE;
 }
 function resultAge(r){
@@ -1140,8 +1207,8 @@ function notifyTrendUp(){
     if(seen.has(k))return;
     seen.add(k);
     beep();
-    const msg=`${ligaNome()} | ${market().name} | 15j ${s.p15.toFixed(1)}% | 30j ${s.g30}/30 ${s.p30.toFixed(1)}% | antes ${s.pPrev.toFixed(1)}% | base ${s.pBase.toFixed(1)}%`;
-    if("Notification" in window&&Notification.permission==="granted")new Notification("BBTips: subida de tendencia",{body:msg});
+    const msg=`${ligaNome()} | ${market().name} | 15j ${s.p15.toFixed(1)}% | 30j ${s.g30}/30 ${s.p30.toFixed(1)}% | antes ${s.pPrev.toFixed(1)}% | base ${s.pBase.toFixed(1)}% | MACD ${s.macd.toFixed(3)}/${s.signal.toFixed(3)} | hist ${s.hist.toFixed(3)} subindo`;
+    if("Notification" in window&&Notification.permission==="granted")new Notification(`BBTips: ${s.tipo}`,{body:msg});
     else if("Notification" in window&&Notification.permission!=="denied")Notification.requestPermission();
   });
   localStorage.setItem(SEEN+"_TRENDUP",JSON.stringify([...seen].slice(-100)));
@@ -1203,6 +1270,29 @@ function resultsCheckTable(){
     return `<tr><td>${esc(r.time||"-")}</td><td>${esc(r.name)}<br>${r.score.a}-${r.score.b}</td><td>${esc(market().name)}</td><td>${r.odd?r.odd.toFixed(2):"-"}</td><td class="${cls}">${paid}</td><td>Times: ${team}<br>Odd: ${odd}</td><td>Prob ${prob}<br>EV ${ev}</td></tr>`;
   }).join("")}</table>`;
 }
+function exportHistory(){
+  let sinais=[],minima=[],subida=[];
+  try{sinais=JSON.parse(localStorage.getItem(SEEN)||"[]")}catch(e){}
+  try{minima=JSON.parse(localStorage.getItem(SEEN+"_FUNDO")||"[]")}catch(e){}
+  try{subida=JSON.parse(localStorage.getItem(SEEN+"_TRENDUP")||"[]")}catch(e){}
+  const data={
+    quando:new Date().toISOString(),
+    liga:activeLiga(),
+    mercado:market().name,
+    api:API_ROWS,
+    resultados:RESULTS_CACHE,
+    historico:loadStoredResults(),
+    alertas:{sinais,minima,subida}
+  };
+  const txt=JSON.stringify(data,null,2);
+  try{navigator.clipboard?.writeText(txt)}catch(e){}
+  const a=document.createElement("a");
+  a.href=URL.createObjectURL(new Blob([txt],{type:"application/json"}));
+  a.download=`bbtips-historico-${new Date().toISOString().slice(0,19).replace(/[:T]/g,"-")}.json`;
+  a.click();
+  setTimeout(()=>URL.revokeObjectURL(a.href),2000);
+  return data;
+}
 function draw(){
   const bodyOld=P.querySelector(".body");
   const oldScroll=bodyOld?bodyOld.scrollTop:0;
@@ -1221,7 +1311,7 @@ function draw(){
   const opts=MARKETS.map(m=>`<option value="${m.key}" ${m.key===CONFIG.market?"selected":""}>${m.name}</option>`).join("");
   P.innerHTML=`<div class="top"><b>BBTips Robo | ${new Date().toLocaleTimeString()} | Liga ${ligaAtual||"auto"} | Mercado ${esc(market().name)} | API ${API_ROWS.length} | Resultados ${RESULTS_CACHE.length} | Proximos ${a.games.length} | Sinais ${a.signals.length}${fundoTxt}</b>
   <span>Mercado <select id="rb-market">${opts}</select> EV+ <input id="rb-ev" value="${CONFIG.minEV}"> Prob <input id="rb-prob" value="${CONFIG.minProb}"> OddFria% <input id="rb-cold" value="${CONFIG.minOddPct}"> Prox <input id="rb-maxprox" value="${CONFIG.maxProximos}"> Tol <input id="rb-tol" value="${CONFIG.tol}">
-  <button id="rb-api">API</button><button id="rb-scan">Atualizar</button><button id="rb-som">Som</button><button id="rb-min">Minimizar</button><button id="rb-close">Fechar</button></span></div>
+  <button id="rb-api">API</button><button id="rb-hist">Historico</button><button id="rb-scan">Atualizar</button><button id="rb-som">Som</button><button id="rb-min">Minimizar</button><button id="rb-close">Fechar</button></span></div>
   <div class="body">
     <h3>Proximos jogos</h3>${trendUpBox()}${marketRankingBox()}${gamesTable(a.games,a.series)}
     <h3>Sinais por minima calculada pelos resultados</h3>${signalsBox(a.signals)}
@@ -1236,6 +1326,7 @@ function draw(){
   document.getElementById("rb-maxprox").onchange=e=>{CONFIG.maxProximos=Number(e.target.value)||6;draw()};
   document.getElementById("rb-tol").onchange=e=>{CONFIG.tol=Number(e.target.value)||0.8;draw()};
   document.getElementById("rb-api").onclick=()=>carregarApiDireto();
+  document.getElementById("rb-hist").onclick=()=>exportHistory();
   document.getElementById("rb-scan").onclick=draw;
   document.getElementById("rb-som").onclick=beep;
   document.getElementById("rb-min").onclick=()=>P.classList.toggle("min");
@@ -1246,8 +1337,10 @@ function draw(){
 }
 draw();
 window[TIMER]=setInterval(draw,CONFIG.intervalMs);
-window.BBTipsRobo={analyze,config:CONFIG};
+window.BBTipsRobo={analyze,config:CONFIG,exportar:exportHistory,historico:loadStoredResults};
 })();
+
+
 
 
 
