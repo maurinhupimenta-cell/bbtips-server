@@ -6,6 +6,7 @@ const API_STORE="BBTIPS_FINAL_API_ROWS_V2";
 const HIST_STORE="BBTIPS_FINAL_RESULTADOS_HIST_V1";
 const AGENTE_LOCAL_URL="http://127.0.0.1:8765/ingest";
 let AGENTE_LOCAL_TS=0;
+let LAST_HIST_SAVE_TS=0;
 document.getElementById(PANEL)?.remove();
 document.getElementById(PANEL+"-style")?.remove();
 clearInterval(window[TIMER]);
@@ -218,10 +219,10 @@ function saveApiRows(rows){
 }
 function sendAgenteLocal(rows){
   const now=Date.now();
-  if(!rows.length||now-AGENTE_LOCAL_TS<1500)return;
+  if(!rows.length||now-AGENTE_LOCAL_TS<60000)return;
   AGENTE_LOCAL_TS=now;
   try{
-    window.postMessage({type:"BBTIPS_AGENT_ROWS",source:"bbtips_extension",sentAt:now,rows},"*");
+    window.postMessage({type:"BBTIPS_AGENT_ROWS",source:"bbtips_extension",sentAt:now,rows:rows.slice(-250)},"*");
   }catch(e){}
 
 }
@@ -262,6 +263,9 @@ function loadStoredResults(){
   }catch(e){return []}
 }
 function saveStoredResults(rows){
+  const now=Date.now();
+  if(now-LAST_HIST_SAVE_TS<30000)return;
+  LAST_HIST_SAVE_TS=now;
   try{localStorage.setItem(HIST_STORE,JSON.stringify(rows.slice(0,2500)))}catch(e){}
 }
 function processApiText(url,text){
@@ -729,6 +733,15 @@ function isClosedResultCell(el){
 }
 function allResultCells(){
   const out=gridResultCells();
+  if(out.length){
+    const seen=new Set();
+    return out.filter(r=>{
+      const key=`${r.time}|${r.name}|${r.score.a}-${r.score.b}|${String(r.txt||"").slice(-80)}`;
+      if(seen.has(key))return false;
+      seen.add(key);
+      return true;
+    }).sort((a,b)=>resultAge(a)-resultAge(b)||a.top-b.top||a.left-b.left||a.idx-b.idx);
+  }
   let idx=0;
   document.querySelectorAll("td").forEach(el=>{
     if(!isClosedResultCell(el))return;
@@ -818,7 +831,8 @@ function resultAge(r){
 function recentPaidResults(){
   const out=[],seen=new Set();
   const mkt=activeMarkets()[0]||market();
-  const base=gridResultCells().length?gridResultCells():RESULTS_CACHE;
+  const grid=gridResultCells();
+  const base=grid.length?grid:RESULTS_CACHE;
   base.slice().sort((a,b)=>resultAge(a)-resultAge(b)||a.top-b.top||a.idx-b.idx).forEach(r=>{
     const odds=oddsForMarket(r.txt,mkt);
     if(!odds.length&&out.length>=10)return;
@@ -1298,7 +1312,6 @@ function draw(){
   const oldScroll=bodyOld?bodyOld.scrollTop:0;
   const oldPageX=window.scrollX,oldPageY=window.scrollY;
   loadApiRows();
-  sendAgenteLocal(API_ROWS.slice(-1500));
   refreshResultsCache();
   sendResultadosAgenteLocal();
   const a=analyze();
