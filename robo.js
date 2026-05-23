@@ -27,8 +27,9 @@ const MARKETS=[
   {key:"under25",name:"Under 2.5",patterns:[/u25@?(\d+[,.]\d+)/ig,/under\s*2[,.]?5@?(\d+[,.]\d+)/ig],label:/u25|under\s*2/i},
   {key:"over35",name:"Over 3.5",patterns:[/o35@?(\d+[,.]\d+)/ig,/over\s*3[,.]?5@?(\d+[,.]\d+)/ig],label:/o35|over\s*3/i},
   {key:"under35",name:"Under 3.5",patterns:[/u35@?(\d+[,.]\d+)/ig,/under\s*3[,.]?5@?(\d+[,.]\d+)/ig],label:/u35|under\s*3/i},
-  {key:"casa_vence",name:"Casa vence",patterns:[/casa@?(\d+[,.]\d+)/ig,/casa\s*vence@?(\d+[,.]\d+)/ig,/cv@?(\d+[,.]\d+)/ig],label:/casa\s*vence/i},
-  {key:"fora_vence",name:"Fora vence",patterns:[/fora@?(\d+[,.]\d+)/ig,/fora\s*vence@?(\d+[,.]\d+)/ig,/fv@?(\d+[,.]\d+)/ig],label:/fora\s*vence/i},
+  {key:"casa_vence",name:"Casa vence",patterns:[/ftc@?(\d+[,.]\d+)/ig,/casa@?(\d+[,.]\d+)/ig,/casa\s*vence@?(\d+[,.]\d+)/ig,/cv@?(\d+[,.]\d+)/ig],label:/ftc|casa\s*vence/i},
+  {key:"empate",name:"Empate",patterns:[/fte@?(\d+[,.]\d+)/ig,/empate@?(\d+[,.]\d+)/ig,/draw@?(\d+[,.]\d+)/ig],label:/fte|empate/i},
+  {key:"fora_vence",name:"Fora vence",patterns:[/ftv@?(\d+[,.]\d+)/ig,/fora@?(\d+[,.]\d+)/ig,/fora\s*vence@?(\d+[,.]\d+)/ig,/fv@?(\d+[,.]\d+)/ig],label:/ftv|fora\s*vence/i},
   {key:"over5",name:"Over 5+",patterns:[/o5@?(\d+[,.]\d+)/ig,/ge5@?(\d+[,.]\d+)/ig,/e5\+?@?(\d+[,.]\d+)/ig,/5\+@?(\d+[,.]\d+)/ig,/over\s*5\+?@?(\d+[,.]\d+)/ig],label:/5\+|ge5|over\s*5/i},
   {key:"casa5",name:"Casa 5+",patterns:[/casa\s*5@?(\d+[,.]\d+)/ig,/c5@?(\d+[,.]\d+)/ig,/tgc5@?(\d+[,.]\d+)/ig,/tcg5@?(\d+[,.]\d+)/ig],label:/casa\s*5|tgc5/i},
   {key:"fora5",name:"Fora 5+",patterns:[/fora\s*5@?(\d+[,.]\d+)/ig,/f5@?(\d+[,.]\d+)/ig,/tgv5@?(\d+[,.]\d+)/ig,/tvg5@?(\d+[,.]\d+)/ig],label:/fora\s*5|tgv5/i}
@@ -112,8 +113,9 @@ function marketAliases(m){
     under25:["u25","under25","under_25","odd_under_2.5"],
     over35:["o35","over35","over_35","odd_over_3.5"],
     under35:["u35","under35","under_35","odd_under_3.5"],
-    casa_vence:["casa","casa_vence","cv"],
-    fora_vence:["fora","fora_vence","fv"],
+    casa_vence:["ftc","casa","casa_vence","cv","odd_ftc","odd_casa","odd_casa_vence"],
+    empate:["fte","empate","draw","x","odd_fte","odd_empate","odd_draw","odd_x"],
+    fora_vence:["ftv","fora","fora_vence","fv","odd_ftv","odd_fora","odd_fora_vence"],
     over5:["o5","ge5","e5+","e5","over5","over_5","5+","odd_over_5","odd_ge5","odd_5+"],
     casa5:["casa5","casa_5","c5","tgc5","tcg5","time_gols_casa_5","odd_casa5","odd_casa_5","odd_tgc5"],
     fora5:["fora5","fora_5","f5","tgv5","tvg5","time_gols_fora_5","time_gols_visitante_5","odd_fora5","odd_fora_5","odd_tgv5"]
@@ -711,6 +713,7 @@ function paysMarket(score,m){
   if(m.key==="over35")return score.t>=4;
   if(m.key==="under35")return score.t<=3;
   if(m.key==="casa_vence")return score.a>score.b;
+  if(m.key==="empate")return score.a===score.b;
   if(m.key==="fora_vence")return score.b>score.a;
   if(m.key==="over5")return score.t>=5;
   if(m.key==="casa5")return score.a>=5;
