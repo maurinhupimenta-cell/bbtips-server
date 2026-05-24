@@ -13,7 +13,7 @@ clearInterval(window[TIMER]);
 ["BBTIPS_FINAL_ROBO_TIMER","BBTIPS_API_ALERTAS_TIMER","BBTIPS_INTERCEPTA_API_TIMER","BBTIPS_PRO_TRADER_TIMER","HB_MULTI_TIMER"].forEach(k=>{try{clearInterval(window[k])}catch(e){}});
 ["bbtips-api-alertas","bbtips-intercepta-api","hb-multi","hb-tips-scanner"].forEach(id=>document.getElementById(id)?.remove());
 
-const CONFIG={market:"over25",tol:0.8,minEV:0,minProb:52,minOddPct:45,minOddSample:8,maxProximos:6,intervalMs:10000,windows:[120,240,480,960],ligas:[1,2,3,4,5,6],ligaAuto:true,horas:"Horas3",filtros:"o15,o25,u25,ambs,ambn,o35,u15,u35,ge5,tgv5,tgc5"};
+const CONFIG={market:"over25",tol:0.8,minEV:0,minProb:52,minOddPct:45,minOddSample:8,maxProximos:6,intervalMs:10000,windows:[120,240,480,960],ligas:[1,2,3,4,5,6],ligaAuto:true,horas:"Horas3",filtros:"o15,o25,u25,ambs,ambn,o35,u15,u35,ge5,tgv5,tgc5,ftc,fte,ftv"};
 let PANEL_HOVER=false;
 let TOOLTIP_SERIES=[];
 let RESULTS_CACHE=[];
@@ -27,9 +27,9 @@ const MARKETS=[
   {key:"under25",name:"Under 2.5",patterns:[/u25@?(\d+[,.]\d+)/ig,/under\s*2[,.]?5@?(\d+[,.]\d+)/ig],label:/u25|under\s*2/i},
   {key:"over35",name:"Over 3.5",patterns:[/o35@?(\d+[,.]\d+)/ig,/over\s*3[,.]?5@?(\d+[,.]\d+)/ig],label:/o35|over\s*3/i},
   {key:"under35",name:"Under 3.5",patterns:[/u35@?(\d+[,.]\d+)/ig,/under\s*3[,.]?5@?(\d+[,.]\d+)/ig],label:/u35|under\s*3/i},
-  {key:"casa_vence",name:"Casa vence",patterns:[/ftc@?(\d+[,.]\d+)/ig,/casa@?(\d+[,.]\d+)/ig,/casa\s*vence@?(\d+[,.]\d+)/ig,/cv@?(\d+[,.]\d+)/ig],label:/ftc|casa\s*vence/i},
-  {key:"empate",name:"Empate",patterns:[/fte@?(\d+[,.]\d+)/ig,/empate@?(\d+[,.]\d+)/ig,/draw@?(\d+[,.]\d+)/ig],label:/fte|empate/i},
-  {key:"fora_vence",name:"Fora vence",patterns:[/ftv@?(\d+[,.]\d+)/ig,/fora@?(\d+[,.]\d+)/ig,/fora\s*vence@?(\d+[,.]\d+)/ig,/fv@?(\d+[,.]\d+)/ig],label:/ftv|fora\s*vence/i},
+  {key:"casa_vence",name:"Casa vence",patterns:[/ftc@?(\d+[,.]\d+)/ig,/casa@?(\d+[,.]\d+)/ig,/casa\s*vence@?(\d+[,.]\d+)/ig,/mandante@?(\d+[,.]\d+)/ig,/home@?(\d+[,.]\d+)/ig,/time\s*a@?(\d+[,.]\d+)/ig,/cv@?(\d+[,.]\d+)/ig],label:/ftc|casa\s*vence|mandante|home/i},
+  {key:"empate",name:"Empate",patterns:[/fte@?(\d+[,.]\d+)/ig,/empate@?(\d+[,.]\d+)/ig,/draw@?(\d+[,.]\d+)/ig,/\bx@?(\d+[,.]\d+)/ig],label:/fte|empate|draw/i},
+  {key:"fora_vence",name:"Fora vence",patterns:[/ftv@?(\d+[,.]\d+)/ig,/fora@?(\d+[,.]\d+)/ig,/fora\s*vence@?(\d+[,.]\d+)/ig,/visitante@?(\d+[,.]\d+)/ig,/away@?(\d+[,.]\d+)/ig,/time\s*b@?(\d+[,.]\d+)/ig,/fv@?(\d+[,.]\d+)/ig],label:/ftv|fora\s*vence|visitante|away/i},
   {key:"over5",name:"Over 5+",patterns:[/o5@?(\d+[,.]\d+)/ig,/ge5@?(\d+[,.]\d+)/ig,/e5\+?@?(\d+[,.]\d+)/ig,/5\+@?(\d+[,.]\d+)/ig,/over\s*5\+?@?(\d+[,.]\d+)/ig],label:/5\+|ge5|over\s*5/i},
   {key:"casa5",name:"Casa 5+",patterns:[/casa\s*5@?(\d+[,.]\d+)/ig,/c5@?(\d+[,.]\d+)/ig,/tgc5@?(\d+[,.]\d+)/ig,/tcg5@?(\d+[,.]\d+)/ig],label:/casa\s*5|tgc5/i},
   {key:"fora5",name:"Fora 5+",patterns:[/fora\s*5@?(\d+[,.]\d+)/ig,/f5@?(\d+[,.]\d+)/ig,/tgv5@?(\d+[,.]\d+)/ig,/tvg5@?(\d+[,.]\d+)/ig],label:/fora\s*5|tgv5/i}
@@ -113,9 +113,9 @@ function marketAliases(m){
     under25:["u25","under25","under_25","odd_under_2.5"],
     over35:["o35","over35","over_35","odd_over_3.5"],
     under35:["u35","under35","under_35","odd_under_3.5"],
-    casa_vence:["ftc","casa","casa_vence","cv","odd_ftc","odd_casa","odd_casa_vence"],
+    casa_vence:["ftc","casa","casa_vence","cv","home","mandante","time_casa","timea","time_a","time_a_vence","casa_vencer","vitoria_casa","odd_ftc","odd_casa","odd_casa_vence","odd_home","odd_mandante","odd_time_a","odd_vitoria_casa"],
     empate:["fte","empate","draw","x","odd_fte","odd_empate","odd_draw","odd_x"],
-    fora_vence:["ftv","fora","fora_vence","fv","odd_ftv","odd_fora","odd_fora_vence"],
+    fora_vence:["ftv","fora","fora_vence","fv","away","visitante","visitante_vence","time_fora","timeb","time_b","time_b_vence","fora_vencer","vitoria_fora","odd_ftv","odd_fora","odd_fora_vence","odd_away","odd_visitante","odd_time_b","odd_vitoria_fora"],
     over5:["o5","ge5","e5+","e5","over5","over_5","5+","odd_over_5","odd_ge5","odd_5+"],
     casa5:["casa5","casa_5","c5","tgc5","tcg5","time_gols_casa_5","odd_casa5","odd_casa_5","odd_tgc5"],
     fora5:["fora5","fora_5","f5","tgv5","tvg5","time_gols_fora_5","time_gols_visitante_5","odd_fora5","odd_fora_5","odd_tgv5"]
@@ -124,11 +124,18 @@ function marketAliases(m){
 }
 function oddFromObj(odds,m){
   if(!odds||typeof odds!=="object")return null;
-  const low={};
-  Object.keys(odds).forEach(k=>low[String(k).toLowerCase()]=Number(String(odds[k]).replace(",",".")));
+  const low={},norm={};
+  const normalize=k=>String(k).toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,"").replace(/[^a-z0-9]+/g,"");
+  Object.keys(odds).forEach(k=>{
+    const v=Number(String(odds[k]).replace(",","."));
+    low[String(k).toLowerCase()]=v;
+    norm[normalize(k)]=v;
+  });
   for(const k of marketAliases(m)){
     const v=low[String(k).toLowerCase()];
     if(Number.isFinite(v)&&v>1)return v;
+    const nv=norm[normalize(k)];
+    if(Number.isFinite(nv)&&nv>1)return nv;
   }
   return null;
 }
@@ -167,6 +174,20 @@ function parseApiOdds(raw){
   });
   return out;
 }
+function collectExtraOdds(obj,out={}){
+  if(!obj||typeof obj!=="object")return out;
+  if(Array.isArray(obj)){
+    obj.forEach(it=>collectExtraOdds(it,out));
+    return out;
+  }
+  const k=obj.Nome??obj.nome??obj.Mercado??obj.mercado??obj.Tipo??obj.tipo??obj.Chave??obj.chave??obj.Key??obj.key??obj.Name??obj.name;
+  const v=obj.Odd??obj.odd??obj.Valor??obj.valor??obj.Value??obj.value??obj.Cotacao??obj.cotacao;
+  if(k!==undefined&&v!==undefined)out[String(k).toLowerCase()]=Number(String(v).replace(",","."));
+  ["Odds","odds","Odd","odd","Mercados","mercados","Markets","markets","Cotacoes","cotacoes"].forEach(key=>{
+    if(obj[key]!==undefined)collectExtraOdds(obj[key],out);
+  });
+  return out;
+}
 function apiScore(raw){
   const m=String(raw||"").match(/(\d+)\s*[-x]\s*(\d+)/i);
   if(!m)return null;
@@ -192,7 +213,7 @@ function flattenApi(json,url){
       const a=c.TimeA||c.timeA||c.Casa||c.casa||c.TimeCasa||"";
       const b=c.TimeB||c.timeB||c.Fora||c.fora||c.TimeFora||"";
       const time=apiTime(c,linha);
-      const odds=parseApiOdds(c.Odds||c.odds||c.Odd||c.odd);
+      const odds=Object.assign({},parseApiOdds(c),parseApiOdds(c.Odds||c.odds||c.Odd||c.odd||c.Mercados||c.mercados||c.Markets||c.markets),collectExtraOdds(c));
       const future=/futuro=true/i.test(url)||Boolean(c.Futuro||c.futuro||(!score&&time));
       if(!a&&!b&&!time)return;
       out.push({
@@ -309,14 +330,18 @@ function activeLiga(){
     const txt=esc(el.innerText||"").toLowerCase();
     if(!names[txt])return;
     const r=el.getBoundingClientRect?.();
-    if(!r||r.width<30||r.height<15||r.top<0||r.top>innerHeight)return;
+    if(!r||r.width<45||r.height<18||r.top<0||r.top>Math.min(innerHeight,240))return;
     const st=getComputedStyle(el);
     const bg=st.backgroundColor||"";
     const m=bg.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/i);
     const rgb=m?{r:Number(m[1]),g:Number(m[2]),b:Number(m[3])}:null;
-    const blue=rgb?rgb.b-rgb.r+rgb.b-rgb.g:0;
-    const active=(el.className||"").toString().match(/active|selected|ativo/i)?100:0;
-    const score=blue+r.width/10+active;
+    const isBlue=rgb?(rgb.b>rgb.r+25&&rgb.b>rgb.g+10):false;
+    const isPurple=rgb?(rgb.b>100&&rgb.r>60&&rgb.b>rgb.g):false;
+    const cls=(el.className||"").toString();
+    const active=/active|selected|ativo|current/i.test(cls)?200:0;
+    const aria=(el.getAttribute?.("aria-selected")==="true"||el.getAttribute?.("aria-current"))?200:0;
+    const selected=(isBlue||isPurple)?120:0;
+    const score=active+aria+selected+Math.min(60,r.width/4)+(240-r.top)/4;
     if(score>bestScore){bestScore=score;best=names[txt]}
   });
   return best;
@@ -1230,6 +1255,24 @@ function notifyTrendUp(){
   });
   localStorage.setItem(SEEN+"_TRENDUP",JSON.stringify([...seen].slice(-100)));
 }
+function oneXTwoOddsFromText(txt){
+  const casa=MARKETS.find(m=>m.key==="casa_vence");
+  const emp=MARKETS.find(m=>m.key==="empate");
+  const fora=MARKETS.find(m=>m.key==="fora_vence");
+  return {
+    casa:casa?(oddsForMarket(txt,casa)[0]||null):null,
+    empate:emp?(oddsForMarket(txt,emp)[0]||null):null,
+    fora:fora?(oddsForMarket(txt,fora)[0]||null):null
+  };
+}
+function oneXTwoOddsText(g){
+  const o=oneXTwoOddsFromText(g.text||"");
+  const parts=[];
+  if(o.casa)parts.push(`Casa ${o.casa.toFixed(2)}`);
+  if(o.empate)parts.push(`Empate ${o.empate.toFixed(2)}`);
+  if(o.fora)parts.push(`Fora ${o.fora.toFixed(2)}`);
+  return parts.length?`1X2: ${parts.join(" | ")}`:"1X2: sem odds";
+}
 function gamesTable(games,series){
   if(!games.length)return "<p class='bad'>Nao achei proximos jogos com odd deste mercado. Clique API ou escolha um mercado que aparece nas odds dos proximos jogos.</p>";
   return `<table><tr><th>Horario</th><th>Jogo</th><th>Mercado</th><th>Odd</th><th>Status</th><th>Probabilidade</th><th>Times/Odd pagante</th><th>Linha 120/240/480/960</th></tr>${games.map(g=>{
@@ -1252,7 +1295,7 @@ function gamesTable(games,series){
     const liga=ligaStatsText(g.market);
     const detalhe=teamDetailText(g,g.market);
     const placar=scorePullText(scoreModelForGame(g,g.market));
-    return `<tr><td>${esc(g.time)}</td><td>${esc(g.name)}</td><td>${esc(g.market.name)}</td><td>${g.odd.toFixed(2)}</td><td class="${cls}">${esc(an.motivo)}<br>Score ${an.score}</td><td>Prob real ${prob}<br>Odd justa ${fair}<br>EV ${ev}<br>EV gale ${evG}<br>${ciclo}<br>${oddFixa}<br>${horario}<br>${liga}</td><td>Times geral: ${team}<br>${detalhe}<br>Odd atual @${g.odd.toFixed(2)} ${odd}<br>${placar}</td><td>${reads}</td></tr>`;
+    return `<tr><td>${esc(g.time)}</td><td>${esc(g.name)}</td><td>${esc(g.market.name)}</td><td>${g.odd.toFixed(2)}</td><td class="${cls}">${esc(an.motivo)}<br>Score ${an.score}</td><td>Prob real ${prob}<br>Odd justa ${fair}<br>EV ${ev}<br>EV gale ${evG}<br>${ciclo}<br>${oddFixa}<br>${horario}<br>${liga}</td><td>Times geral: ${team}<br>${oneXTwoOddsText(g)}<br>${detalhe}<br>Odd atual @${g.odd.toFixed(2)} ${odd}<br>${placar}</td><td>${reads}</td></tr>`;
   }).join("")}</table>`;
 }
 function signalsBox(signals){
