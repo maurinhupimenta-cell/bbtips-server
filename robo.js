@@ -1037,7 +1037,7 @@ function teamDetailText(game,m){
   const p=teamNames(game.name);
   if(p.length<2)return "sem base casa/fora";
   const aCasa=sidePayPct(p[0],m,"casa"),aFora=sidePayPct(p[0],m,"fora"),bCasa=sidePayPct(p[1],m,"casa"),bFora=sidePayPct(p[1],m,"fora");
-  return `Casa ${esc(p[0])}: casa ${fmtStat(aCasa)} | fora ${fmtStat(aFora)}<br>Fora ${esc(p[1])}: casa ${fmtStat(bCasa)} | fora ${fmtStat(bFora)}<br>Rank 3h ${esc(p[0])}: ${teamRankPos(p[0],m,3)}<br>Rank 3h ${esc(p[1])}: ${teamRankPos(p[1],m,3)}<br>Rank 6h ${esc(p[0])}: ${teamRankPos(p[0],m,6)}<br>Rank 6h ${esc(p[1])}: ${teamRankPos(p[1],m,6)}`;
+  return `Casa ${esc(p[0])}: casa ${fmtStat(aCasa)} | fora ${fmtStat(aFora)}<br>Fora ${esc(p[1])}: casa ${fmtStat(bCasa)} | fora ${fmtStat(bFora)}`;
 }
 function scoreNextStats(score,m){
   const key=scoreKey(score);
