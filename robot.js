@@ -60,8 +60,27 @@ P.addEventListener("mouseenter",()=>PANEL_HOVER=true);
 P.addEventListener("mouseleave",()=>PANEL_HOVER=false);
 hookApi();
 loadApiRows();
+compactAlertStorage();
 
 function esc(v){return String(v??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])).replace(/\s+/g," ").trim()}
+function safeSetJson(key,val,limit=80){
+  let data=Array.isArray(val)?val.slice(-limit):val;
+  try{localStorage.setItem(key,JSON.stringify(data));return true}catch(e){}
+  if(Array.isArray(data)){
+    data=data.slice(-30);
+    try{localStorage.setItem(key,JSON.stringify(data));return true}catch(e){}
+  }
+  try{localStorage.removeItem(key)}catch(e){}
+  return false;
+}
+function compactAlertStorage(){
+  [SEEN,SEEN+"_FUNDO",SEEN+"_TRENDUP"].forEach(k=>{
+    try{
+      const v=JSON.parse(localStorage.getItem(k)||"[]");
+      if(Array.isArray(v)&&v.length>40)localStorage.setItem(k,JSON.stringify(v.slice(-40)));
+    }catch(e){try{localStorage.removeItem(k)}catch(x){}}
+  });
+}
 function market(){return MARKETS.find(m=>m.key===CONFIG.market)||MARKETS[0]}
 function activeMarkets(){return MARKETS.filter(m=>m.key===CONFIG.market)}
 function beep(){
@@ -1218,7 +1237,7 @@ function notify(signals){
     if("Notification" in window&&Notification.permission==="granted")new Notification("BBTips sinal",{body:msg});
     else if("Notification" in window&&Notification.permission!=="denied")Notification.requestPermission();
   });
-  localStorage.setItem(SEEN,JSON.stringify([...seen].slice(-100)));
+  safeSetJson(SEEN,[...seen],60);
 }
 function notifyFundo(series){
   const fundos=[...globalFundos(series),...visualFundos(series)];
@@ -1236,7 +1255,7 @@ function notifyFundo(series){
     if("Notification" in window&&Notification.permission==="granted")new Notification("BBTips: bateu a minima",{body:msg});
     else if("Notification" in window&&Notification.permission!=="denied")Notification.requestPermission();
   });
-  localStorage.setItem(SEEN+"_FUNDO",JSON.stringify([...seen].slice(-100)));
+  safeSetJson(SEEN+"_FUNDO",[...seen],60);
 }
 function notifyTrendUp(){
   const sinais=trendUpSignals();
@@ -1253,7 +1272,7 @@ function notifyTrendUp(){
     if("Notification" in window&&Notification.permission==="granted")new Notification(`BBTips: ${s.tipo}`,{body:msg});
     else if("Notification" in window&&Notification.permission!=="denied")Notification.requestPermission();
   });
-  localStorage.setItem(SEEN+"_TRENDUP",JSON.stringify([...seen].slice(-100)));
+  safeSetJson(SEEN+"_TRENDUP",[...seen],60);
 }
 function oneXTwoOddsFromText(txt){
   const casa=MARKETS.find(m=>m.key==="casa_vence");
