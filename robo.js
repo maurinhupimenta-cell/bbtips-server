@@ -1055,7 +1055,7 @@ function topOddRankText(m,hours,limit=8){
 }
 function marketRankingBox(){
   const m=market();
-  return `<div class="sig"><b class="ok">Ranking do mercado ${esc(m.name)}</b><br>${topTeamRankText(m,3)}<br>${topTeamRankText(m,6)}<br>${topOddRankText(m,3)}<br>${topOddRankText(m,6)}</div>`;
+  return `<div class="sig"><b class="ok">Ranking do mercado ${esc(m.name)}</b><br>${topOddRankText(m,3)}<br>${topOddRankText(m,6)}</div>`;
 }
 function teamDetailText(game,m){
   const p=teamNames(game.name);
@@ -1318,8 +1318,7 @@ function gamesTable(games,series){
     const horario=hourStatsText(hourStatsForGame(g,g.market));
     const liga=ligaStatsText(g.market);
     const detalhe=teamDetailText(g,g.market);
-    const placar=scorePullText(scoreModelForGame(g,g.market));
-    return `<tr><td>${esc(g.time)}</td><td>${esc(g.name)}</td><td>${esc(g.market.name)}</td><td>${g.odd.toFixed(2)}</td><td class="${cls}">${esc(an.motivo)}<br>Score ${an.score}</td><td>Prob real ${prob}<br>Odd justa ${fair}<br>EV ${ev}<br>EV gale ${evG}<br>${ciclo}<br>${oddFixa}<br>${horario}<br>${liga}</td><td>Times geral: ${team}<br>${oneXTwoOddsText(g)}<br>${detalhe}<br>Odd atual @${g.odd.toFixed(2)} ${odd}<br>${placar}</td><td>${reads}</td></tr>`;
+    return `<tr><td>${esc(g.time)}</td><td>${esc(g.name)}</td><td>${esc(g.market.name)}</td><td>${g.odd.toFixed(2)}</td><td class="${cls}">${esc(an.motivo)}<br>Score ${an.score}</td><td>Prob real ${prob}<br>Odd justa ${fair}<br>EV ${ev}<br>EV gale ${evG}<br>${ciclo}<br>${oddFixa}<br>${horario}<br>${liga}</td><td>Times geral: ${team}<br>${oneXTwoOddsText(g)}<br>${detalhe}<br>Odd atual @${g.odd.toFixed(2)} ${odd}</td><td>${reads}</td></tr>`;
   }).join("")}</table>`;
 }
 function signalsBox(signals){
