@@ -18,6 +18,11 @@ let PANEL_HOVER=false;
 let TOOLTIP_SERIES=[];
 let RESULTS_CACHE=[];
 let API_ROWS=[];
+let DRAWING=false;
+let DRAW_PENDING=false;
+let DRAW_TIMER=null;
+let LAST_RESULTS_REFRESH=0;
+let LAST_API_LOAD=0;
 const MARKETS=[
   {key:"ambas_sim",name:"Ambas Sim",patterns:[/ambs@?(\d+[,.]\d+)/ig,/ambas\s*sim@?(\d+[,.]\d+)/ig],label:/ambs|ambas\s*sim|ambas\s*marcam/i},
   {key:"ambas_nao",name:"Ambas Nao",patterns:[/ambn@?(\d+[,.]\d+)/ig,/ambas\s*nao@?(\d+[,.]\d+)/ig],label:/ambn|ambas\s*n/i},
@@ -1372,12 +1377,38 @@ function exportHistory(){
   setTimeout(()=>URL.revokeObjectURL(a.href),2000);
   return data;
 }
+function scheduleDraw(delay=180){
+  clearTimeout(DRAW_TIMER);
+  DRAW_TIMER=setTimeout(()=>draw(),delay);
+}
+function refreshResultsCacheLight(force=false){
+  const now=Date.now();
+  if(force||!RESULTS_CACHE.length||now-LAST_RESULTS_REFRESH>25000){
+    refreshResultsCache();
+    LAST_RESULTS_REFRESH=now;
+  }
+  return RESULTS_CACHE;
+}
+function loadApiRowsLight(force=false){
+  const now=Date.now();
+  if(force||!API_ROWS.length||now-LAST_API_LOAD>25000){
+    loadApiRows();
+    LAST_API_LOAD=now;
+  }
+  return API_ROWS;
+}
 function draw(){
+  if(DRAWING){
+    DRAW_PENDING=true;
+    return;
+  }
+  DRAWING=true;
+  try{
   const bodyOld=P.querySelector(".body");
   const oldScroll=bodyOld?bodyOld.scrollTop:0;
   const oldPageX=window.scrollX,oldPageY=window.scrollY;
-  loadApiRows();
-  refreshResultsCache();
+  loadApiRowsLight();
+  refreshResultsCacheLight();
   sendResultadosAgenteLocal();
   const a=analyze();
   notify(a.signals);
@@ -1397,24 +1428,31 @@ function draw(){
     <h3>Conferencia dos ultimos resultados</h3>${resultsCheckTable()}
     <h3>Linha calculada pelos resultados fechados</h3>${trendBox(a.series)}
   </div>`;
-  document.getElementById("rb-market").onchange=e=>{CONFIG.market=e.target.value;draw()};
-  document.getElementById("rb-ev").onchange=e=>{CONFIG.minEV=Number(e.target.value)||0;draw()};
-  document.getElementById("rb-prob").onchange=e=>{CONFIG.minProb=Number(e.target.value)||52;draw()};
-  document.getElementById("rb-cold").onchange=e=>{CONFIG.minOddPct=Number(e.target.value)||45;draw()};
-  document.getElementById("rb-maxprox").onchange=e=>{CONFIG.maxProximos=Number(e.target.value)||6;draw()};
-  document.getElementById("rb-tol").onchange=e=>{CONFIG.tol=Number(e.target.value)||0.8;draw()};
+  document.getElementById("rb-market").onchange=e=>{CONFIG.market=e.target.value;scheduleDraw()};
+  document.getElementById("rb-ev").onchange=e=>{CONFIG.minEV=Number(e.target.value)||0;scheduleDraw()};
+  document.getElementById("rb-prob").onchange=e=>{CONFIG.minProb=Number(e.target.value)||52;scheduleDraw()};
+  document.getElementById("rb-cold").onchange=e=>{CONFIG.minOddPct=Number(e.target.value)||45;scheduleDraw()};
+  document.getElementById("rb-maxprox").onchange=e=>{CONFIG.maxProximos=Number(e.target.value)||6;scheduleDraw()};
+  document.getElementById("rb-tol").onchange=e=>{CONFIG.tol=Number(e.target.value)||0.8;scheduleDraw()};
   document.getElementById("rb-api").onclick=()=>carregarApiDireto();
   document.getElementById("rb-hist").onclick=()=>exportHistory();
-  document.getElementById("rb-scan").onclick=draw;
+  document.getElementById("rb-scan").onclick=()=>scheduleDraw(20);
   document.getElementById("rb-som").onclick=beep;
   document.getElementById("rb-min").onclick=()=>P.classList.toggle("min");
   document.getElementById("rb-close").onclick=()=>{clearInterval(window[TIMER]);P.remove()};
   const bodyNew=P.querySelector(".body");
   if(bodyNew)bodyNew.scrollTop=oldScroll;
   window.scrollTo(oldPageX,oldPageY);
+  }finally{
+    DRAWING=false;
+    if(DRAW_PENDING){
+      DRAW_PENDING=false;
+      scheduleDraw(250);
+    }
+  }
 }
 draw();
-window[TIMER]=setInterval(draw,CONFIG.intervalMs);
+window[TIMER]=setInterval(()=>scheduleDraw(20),CONFIG.intervalMs);
 window.BBTipsRobo={analyze,config:CONFIG,exportar:exportHistory,historico:loadStoredResults};
 })();
 
