@@ -2,13 +2,11 @@ const SCRIPT_ID = "bbtips-robo-injected-script";
 const API_BASE = "https://bbtips-server-production.up.railway.app";
 let CHECK_TIMER = null;
 
-async function injectRobot() {
+function injectRobot() {
   if (document.getElementById(SCRIPT_ID)) return;
-  const res = await chrome.storage.local.get(["bbtips_token"]);
-  if (!res.bbtips_token) return;
   const s = document.createElement("script");
   s.id = SCRIPT_ID;
-  s.src = `${API_BASE}/api/robo.js?token=${encodeURIComponent(res.bbtips_token)}&v=${Date.now()}`;
+  s.src = chrome.runtime.getURL("robot.js") + "?v=" + Date.now();
   s.onload = () => s.remove();
   (document.head || document.documentElement).appendChild(s);
 }
