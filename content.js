@@ -2,11 +2,13 @@ const SCRIPT_ID = "bbtips-robo-injected-script";
 const API_BASE = "https://bbtips-server-production.up.railway.app";
 let CHECK_TIMER = null;
 
-function injectRobot() {
+async function injectRobot() {
   if (document.getElementById(SCRIPT_ID)) return;
+  const res = await chrome.storage.local.get(["bbtips_token"]);
+  if (!res.bbtips_token) return;
   const s = document.createElement("script");
   s.id = SCRIPT_ID;
-  s.src = chrome.runtime.getURL("robot.js") + "?v=" + Date.now();
+  s.src = `${API_BASE}/api/robo.js?token=${encodeURIComponent(res.bbtips_token)}&v=${Date.now()}`;
   s.onload = () => s.remove();
   (document.head || document.documentElement).appendChild(s);
 }
@@ -26,6 +28,9 @@ function removeRobotPanel() {
       document.getElementById('bbtips-intercepta-api')?.remove();
       document.getElementById('hb-multi')?.remove();
       document.getElementById('hb-tips-scanner')?.remove();
+      document.getElementById('bbtips-robo-root')?.remove();
+      document.getElementById('bbtips-robo-canvas')?.remove();
+      document.getElementById('bbtips-marker-handle')?.remove();
     } catch(e) {}
   `;
   (document.head || document.documentElement).appendChild(cleanup);
