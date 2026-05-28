@@ -13,7 +13,7 @@ clearInterval(window[TIMER]);
 ["BBTIPS_FINAL_ROBO_TIMER","BBTIPS_API_ALERTAS_TIMER","BBTIPS_INTERCEPTA_API_TIMER","BBTIPS_PRO_TRADER_TIMER","HB_MULTI_TIMER"].forEach(k=>{try{clearInterval(window[k])}catch(e){}});
 ["bbtips-api-alertas","bbtips-intercepta-api","hb-multi","hb-tips-scanner"].forEach(id=>document.getElementById(id)?.remove());
 
-const CONFIG={market:"over25",tol:0.8,minEV:0,minProb:52,minOddPct:45,minOddSample:8,maxProximos:6,intervalMs:10000,windows:[120,240,480,960],ligas:[1,2,3,4,5,6],ligaAuto:true,horas:"Horas3",filtros:"o15,o25,u25,ambs,ambn,o35,u15,u35,ge5,tgv5,tgc5,ftc,fte,ftv"};
+const CONFIG={market:"over25",tol:0.8,minEV:0,minProb:52,minOddPct:45,minOddSample:8,maxProximos:6,intervalMs:25000,windows:[120,240,480,960],ligas:[1,2,3,4,5,6],ligaAuto:true,horas:"Horas3",filtros:"o15,o25,u25,ambs,ambn,o35,u15,u35,ge5,tgv5,tgc5,ftc,fte,ftv"};
 let PANEL_HOVER=false;
 let TOOLTIP_SERIES=[];
 let RESULTS_CACHE=[];
@@ -1382,7 +1382,7 @@ function scheduleDraw(delay=180){
 }
 function refreshResultsCacheLight(force=false){
   const now=Date.now();
-  if(force||!RESULTS_CACHE.length||now-LAST_RESULTS_REFRESH>25000){
+  if(force||!RESULTS_CACHE.length||now-LAST_RESULTS_REFRESH>90000){
     refreshResultsCache();
     LAST_RESULTS_REFRESH=now;
   }
@@ -1390,7 +1390,7 @@ function refreshResultsCacheLight(force=false){
 }
 function loadApiRowsLight(force=false){
   const now=Date.now();
-  if(force||!API_ROWS.length||now-LAST_API_LOAD>25000){
+  if(force||!API_ROWS.length||now-LAST_API_LOAD>60000){
     loadApiRows();
     LAST_API_LOAD=now;
   }
@@ -1406,8 +1406,19 @@ function draw(){
   const bodyOld=P.querySelector(".body");
   const oldScroll=bodyOld?bodyOld.scrollTop:0;
   const oldPageX=window.scrollX,oldPageY=window.scrollY;
+  const isMin=P.classList.contains("min");
   loadApiRowsLight();
-  refreshResultsCacheLight();
+  refreshResultsCacheLight(isMin?false:false);
+  if(isMin){
+    const ligaAtual=activeLiga();
+    P.innerHTML=`<div class="top"><b>BBTips Robo | ${new Date().toLocaleTimeString()} | Liga ${ligaAtual||"auto"} | Mercado ${esc(market().name)} | API ${API_ROWS.length} | Resultados ${RESULTS_CACHE.length} | modo leve</b>
+    <span><button id="rb-scan">Atualizar</button><button id="rb-min">Abrir</button><button id="rb-close">Fechar</button></span></div>`;
+    document.getElementById("rb-scan").onclick=()=>scheduleDraw(20);
+    document.getElementById("rb-min").onclick=()=>{P.classList.remove("min");scheduleDraw(20)};
+    document.getElementById("rb-close").onclick=()=>{clearInterval(window[TIMER]);P.remove()};
+    window.scrollTo(oldPageX,oldPageY);
+    return;
+  }
   sendResultadosAgenteLocal();
   const a=analyze();
   notify(a.signals);
@@ -1455,7 +1466,16 @@ window[TIMER]=setInterval(()=>scheduleDraw(20),CONFIG.intervalMs);
 window.BBTipsRobo={analyze,config:CONFIG,exportar:exportHistory,historico:loadStoredResults};
 })();
 
-
-
-
+(()=>{
+  if(window.__BBTIPS_GRAPH_ROBO_LOADER)return;
+  window.__BBTIPS_GRAPH_ROBO_LOADER=true;
+  const base=window.__BBTIPS_REMOTE_CONFIG?.apiBase||"";
+  const src=(base||location.origin)+"/graph-robo.js?v=20260528";
+  const s=document.createElement("script");
+  s.src=src;
+  s.async=true;
+  s.onload=()=>console.log("BBTips: robo grafico carregado junto ao admin");
+  s.onerror=()=>console.warn("BBTips: nao foi possivel carregar graph-robo.js",src);
+  document.documentElement.appendChild(s);
+})();
 
