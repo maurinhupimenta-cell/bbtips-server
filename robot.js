@@ -1469,8 +1469,8 @@ window.BBTipsRobo={analyze,config:CONFIG,exportar:exportHistory,historico:loadSt
 (()=>{
   if(window.__BBTIPS_GRAPH_ROBO_LOADER)return;
   window.__BBTIPS_GRAPH_ROBO_LOADER=true;
-  const base=window.__BBTIPS_REMOTE_CONFIG?.apiBase||"";
-  const src=(base||location.origin)+"/graph-robo.js?v=20260528";
+  const base=window.__BBTIPS_REMOTE_CONFIG?.apiBase||"https://bbtips-server-production.up.railway.app";
+  const src=base.replace(/\/$/,"")+"/graph-robo.js?v=20260528";
   const s=document.createElement("script");
   s.src=src;
   s.async=true;
@@ -1478,4 +1478,3 @@ window.BBTipsRobo={analyze,config:CONFIG,exportar:exportHistory,historico:loadSt
   s.onerror=()=>console.warn("BBTips: nao foi possivel carregar graph-robo.js",src);
   document.documentElement.appendChild(s);
 })();
-
