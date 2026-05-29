@@ -729,7 +729,7 @@
     const last = readJson(LAST_PATTERN_KEY, {});
     if (last.key === key && Date.now() - Number(last.ts || 0) < 55000) return;
 
-    const history = readJson(PATTERN_HISTORY_KEY, []);
+    const history = readPatternHistory();
     history.push({
       key,
       ts: Date.now(),
@@ -746,12 +746,12 @@
       }
     });
     while (history.length > 80) history.shift();
-    localStorage.setItem(PATTERN_HISTORY_KEY, JSON.stringify(history));
-    localStorage.setItem(LAST_PATTERN_KEY, JSON.stringify({ key, ts: Date.now() }));
+    safeSetJson(PATTERN_HISTORY_KEY, history);
+    safeSetJson(LAST_PATTERN_KEY, { key, ts: Date.now() });
   }
 
   function analyzeVisualBacktest(graphState) {
-    const history = readJson(PATTERN_HISTORY_KEY, []);
+    const history = readPatternHistory();
     if (!graphState || history.length < 8) {
       return { status: history.length + "/8 amostras", over: "--", btts: "--", sinal: "MEMORIA INSUFICIENTE", color: "#ffd54a" };
     }
@@ -799,6 +799,31 @@
     if (Boolean(now.histPositive) !== Boolean(old.histPositive)) score -= 18;
     if (Boolean(now.histWeakening) !== Boolean(old.histWeakening)) score -= 8;
     return Math.max(0, Math.round(score));
+  }
+
+  function readPatternHistory() {
+    const raw = readJson(PATTERN_HISTORY_KEY, []);
+    if (!Array.isArray(raw)) {
+      localStorage.removeItem(PATTERN_HISTORY_KEY);
+      return [];
+    }
+    return raw.filter((item) =>
+      item &&
+      Number.isFinite(Number(item.zonePct)) &&
+      Number.isFinite(Number(item.force)) &&
+      Number.isFinite(Number(item.slope)) &&
+      item.result &&
+      typeof item.result.over25 === "boolean" &&
+      typeof item.result.btts === "boolean"
+    );
+  }
+
+  function safeSetJson(key, value) {
+    try {
+      localStorage.setItem(key, JSON.stringify(value));
+    } catch (e) {
+      localStorage.removeItem(key);
+    }
   }
 
   function analyze(points, hist, market, allPoints) {
