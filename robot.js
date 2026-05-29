@@ -1475,16 +1475,12 @@ window.BBTipsRobo={analyze,config:CONFIG,exportar:exportHistory,historico:loadSt
   const Z = 2147483647;
   const PANEL_POS_KEY = "bbtips-robo-panel-pos";
   const PANEL_MIN_KEY = "bbtips-robo-panel-min";
-  const MARKER_OFFSET_KEY = "bbtips-robo-marker-offset-v2";
   const RIGHT_FOCUS_RATIO = 0.34;
   const LOOP_MS = 2600;
   const SLOW_SCAN_MS = 6500;
   let panel;
   let canvas;
-  let markerHandle;
   let dragging = null;
-  let markerDrag = null;
-  let markerOffsetX = 0;
   let cachedHistChart = null;
   let cachedHist = [];
   let cachedMarket = null;
@@ -1558,15 +1554,6 @@ window.BBTipsRobo={analyze,config:CONFIG,exportar:exportHistory,historico:loadSt
 
     document.documentElement.appendChild(panel);
     wirePanelControls();
-    wireMarkerControls();
-  }
-
-  function wireMarkerControls() {
-    if (!markerHandle) return;
-    markerHandle.addEventListener("dblclick", () => {
-      markerOffsetX = 0;
-      localStorage.removeItem(MARKER_OFFSET_KEY);
-    });
   }
 
   function wirePanelControls() {
@@ -1648,27 +1635,6 @@ window.BBTipsRobo={analyze,config:CONFIG,exportar:exportHistory,historico:loadSt
       "position:fixed!important;left:0!important;top:0!important;pointer-events:none!important;z-index:" + (Z - 1) + "!important"
     );
     document.documentElement.appendChild(canvas);
-
-    markerHandle = document.createElement("div");
-    markerHandle.id = "bbtips-marker-handle";
-    markerHandle.title = "Arraste para ajustar o marcador atual";
-    markerHandle.setAttribute(
-      "style",
-      [
-        "position:fixed!important",
-        "left:-50px!important",
-        "top:-50px!important",
-        "width:16px!important",
-        "height:16px!important",
-        "border-radius:50%!important",
-        "border:2px solid #ffd54a!important",
-        "background:rgba(0,0,0,.74)!important",
-        "z-index:" + Z + "!important",
-        "cursor:ew-resize!important",
-        "box-shadow:0 0 8px rgba(255,213,74,.75)!important"
-      ].join(";")
-    );
-    document.documentElement.appendChild(markerHandle);
   }
 
   function loop() {
@@ -2214,7 +2180,10 @@ window.BBTipsRobo={analyze,config:CONFIG,exportar:exportHistory,historico:loadSt
     const sMicro = slope(micro);
     const vol = volatility(smooth) || 1;
     const score = s1 / vol;
-    const microScore = sMicro / vol;
+    const rawEdge = points.slice(-Math.min(6, points.length)).map((p) => ({ ...p, v: -p.y }));
+    const edgeMove = rawEdge.length >= 2 ? rawEdge[rawEdge.length - 1].v - rawEdge[0].v : 0;
+    const edgeVol = volatility(rawEdge) || vol;
+    const microScore = (edgeMove / Math.max(1, rawEdge.length - 1)) / Math.max(0.01, edgeVol);
     const force = Math.min(100, Math.round(Math.abs(score) * 85));
     const baseForZone = allPoints && allPoints.length > points.length ? allPoints.map((p) => ({ ...p, v: -p.y })) : smooth;
     const values = baseForZone.map((p) => p.v);
@@ -2222,7 +2191,7 @@ window.BBTipsRobo={analyze,config:CONFIG,exportar:exportHistory,historico:loadSt
     const max = Math.max(...values);
     const range = Math.max(1, max - min);
     const currentPoint = smooth[smooth.length - 1];
-    const currentPointRaw = points[points.length - 1] || currentPoint;
+    const currentPointRaw = points.slice().sort((a, b) => a.x - b.x).pop() || currentPoint;
     const current = currentPoint.v;
     const zonePct = Math.round(((current - min) / range) * 100);
     const zone =
@@ -2386,7 +2355,7 @@ window.BBTipsRobo={analyze,config:CONFIG,exportar:exportHistory,historico:loadSt
     }
 
     return {
-      status: points.length + " pts foco | hist " + (hist?.length || 0) + " | preso na ponta",
+      status: points.length + " pts foco | hist " + (hist?.length || 0) + " | ponta direita",
       sinal,
       color,
       forca: force + "%",
@@ -2507,40 +2476,18 @@ window.BBTipsRobo={analyze,config:CONFIG,exportar:exportHistory,historico:loadSt
 
   function drawCurrentPoint(ctx, point) {
     if (!point) return;
-    const x = point.x + markerOffsetX;
+    const x = point.x;
     const y = point.y;
-    canvas.dataset.markerX = String(x);
-    if (markerHandle) {
-      markerHandle.style.setProperty("left", x - 8 + "px", "important");
-      markerHandle.style.setProperty("top", y - 8 + "px", "important");
-    }
 
     ctx.save();
     ctx.strokeStyle = "rgba(255,213,74,.74)";
     ctx.fillStyle = "rgba(0,0,0,.72)";
     ctx.lineWidth = 2;
-    ctx.setLineDash([3, 8]);
-    ctx.beginPath();
-    ctx.moveTo(x, 0);
-    ctx.lineTo(x, window.innerHeight);
-    ctx.stroke();
-    ctx.setLineDash([]);
 
     ctx.beginPath();
-    ctx.arc(x, y, 6, 0, Math.PI * 2);
+    ctx.arc(x, y, 5, 0, Math.PI * 2);
     ctx.fill();
     ctx.stroke();
-
-    ctx.font = "900 9px Arial";
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-    const label = "A";
-    const labelY = Math.max(12, y - 14);
-    ctx.fillStyle = "rgba(0,0,0,.9)";
-    roundRect(ctx, x - 8, labelY - 7, 16, 14, 4);
-    ctx.fill();
-    ctx.fillStyle = "#ffd54a";
-    ctx.fillText(label, x, labelY);
     ctx.restore();
   }
 
