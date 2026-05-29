@@ -4,6 +4,8 @@
   const Z = 2147483647;
   const PANEL_POS_KEY = "bbtips-robo-panel-pos";
   const PANEL_MIN_KEY = "bbtips-robo-panel-min";
+  const PATTERN_HISTORY_KEY = "bbtips-robo-pattern-history-v2";
+  const LAST_PATTERN_KEY = "bbtips-robo-last-pattern-v2";
   const RIGHT_FOCUS_RATIO = 0.34;
   const LOOP_MS = 2600;
   const SLOW_SCAN_MS = 6500;
@@ -76,6 +78,13 @@
       'Media gols: <span id="bbtips-gols" style="font-weight:800">--</span> | ',
       'Seq: <span id="bbtips-seq" style="font-weight:800">--</span><br>',
       '<span id="bbtips-recomendacao" style="display:block;margin-top:4px;font-weight:900;font-size:15px;color:#ffd54a">AGUARDAR</span>',
+      "</div>",
+      '<div style="margin-top:10px;padding:10px;background:rgba(255,213,74,.08);border:1px solid rgba(255,213,74,.35);border-radius:8px;font-size:12px;line-height:1.45">',
+      '<strong style="color:#ffd54a;font-size:13px">BACKTEST VISUAL</strong><br>',
+      '<span id="bbtips-bt-status">juntando memoria...</span><br>',
+      'Over: <span id="bbtips-bt-over" style="font-weight:800">--</span> | ',
+      'Ambas: <span id="bbtips-bt-btts" style="font-weight:800">--</span><br>',
+      '<span id="bbtips-bt-sinal" style="display:block;margin-top:4px;font-weight:900;color:#ffd54a">AGUARDAR</span>',
       "</div>",
       '<div id="bbtips-nota" style="font-size:12px;line-height:1.35;color:#ddd;margin-top:10px">Se voce esta vendo este painel, a extensao esta funcionando.</div>',
       "</div>"
@@ -225,6 +234,8 @@
     const market = analyzeBTTSandOver(goalsData);
     const focusedPoints = focusRightEdge(points);
     const a = analyze(focusedPoints, hist, market, points);
+    a.backtest = analyzeVisualBacktest(a.graphState);
+    rememberPattern(goalsData, a.graphState);
     write(a);
     draw(chart, focusedPoints, a, histChart);
   }
@@ -701,6 +712,85 @@
     return streak;
   }
 
+  function rememberPattern(goalsData, graphState) {
+    if (!goalsData?.length || !graphState) return;
+    const lastGoal = goalsData[goalsData.length - 1];
+    const key = [lastGoal.score, lastGoal.total, lastGoal.btts ? 1 : 0, lastGoal.over25 ? 1 : 0].join("|");
+    const last = readJson(LAST_PATTERN_KEY, {});
+    if (last.key === key && Date.now() - Number(last.ts || 0) < 55000) return;
+
+    const history = readJson(PATTERN_HISTORY_KEY, []);
+    history.push({
+      key,
+      ts: Date.now(),
+      zonePct: graphState.zonePct,
+      force: graphState.force,
+      histPositive: graphState.histPositive,
+      histWeakening: graphState.histWeakening,
+      slope: graphState.slope,
+      result: {
+        total: lastGoal.total,
+        btts: lastGoal.btts,
+        over25: lastGoal.over25,
+        score: lastGoal.score
+      }
+    });
+    while (history.length > 80) history.shift();
+    localStorage.setItem(PATTERN_HISTORY_KEY, JSON.stringify(history));
+    localStorage.setItem(LAST_PATTERN_KEY, JSON.stringify({ key, ts: Date.now() }));
+  }
+
+  function analyzeVisualBacktest(graphState) {
+    const history = readJson(PATTERN_HISTORY_KEY, []);
+    if (!graphState || history.length < 8) {
+      return { status: history.length + "/8 amostras", over: "--", btts: "--", sinal: "MEMORIA INSUFICIENTE", color: "#ffd54a" };
+    }
+
+    const similar = history
+      .map((item) => ({ item, score: similarityScore(graphState, item) }))
+      .filter((x) => x.score >= 58)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 18)
+      .map((x) => x.item);
+
+    if (similar.length < 4) {
+      return { status: "similares " + similar.length + " de " + history.length, over: "--", btts: "--", sinal: "SEM PADRAO FORTE", color: "#ffd54a" };
+    }
+
+    const overWins = similar.filter((x) => x.result?.over25).length;
+    const bttsWins = similar.filter((x) => x.result?.btts).length;
+    const overPct = Math.round((overWins / similar.length) * 100);
+    const bttsPct = Math.round((bttsWins / similar.length) * 100);
+    let sinal = "AGUARDAR";
+    let color = "#ffd54a";
+
+    if (overPct >= 70 && bttsPct >= 55 && graphState.force >= 40 && graphState.zonePct < 75 && (graphState.histPositive || !graphState.histWeakening)) {
+      sinal = "PADRAO BOM OVER";
+      color = "#00ff66";
+    } else if (overPct <= 42 || (graphState.zonePct > 75 && graphState.histWeakening)) {
+      sinal = "PADRAO RUIM / EVITAR";
+      color = "#ff4d5f";
+    }
+
+    return {
+      status: "similares " + similar.length + " de " + history.length,
+      over: overWins + "/" + similar.length + " " + overPct + "%",
+      btts: bttsWins + "/" + similar.length + " " + bttsPct + "%",
+      sinal,
+      color
+    };
+  }
+
+  function similarityScore(now, old) {
+    let score = 100;
+    score -= Math.min(38, Math.abs(now.zonePct - Number(old.zonePct || 0)) * 1.15);
+    score -= Math.min(26, Math.abs(now.force - Number(old.force || 0)) * 0.55);
+    score -= Math.min(18, Math.abs(now.slope - Number(old.slope || 0)) * 12);
+    if (Boolean(now.histPositive) !== Boolean(old.histPositive)) score -= 18;
+    if (Boolean(now.histWeakening) !== Boolean(old.histWeakening)) score -= 8;
+    return Math.max(0, Math.round(score));
+  }
+
   function analyze(points, hist, market, allPoints) {
     const smooth = ema(points.map((p) => ({ ...p, v: -p.y })), 8);
     const histA = analyzeHistogram(hist);
@@ -905,7 +995,14 @@
       acao,
       nota,
       smooth,
-      currentPoint: currentPointRaw
+      currentPoint: currentPointRaw,
+      graphState: {
+        zonePct,
+        force,
+        histPositive: histA.ok ? histA.positive : false,
+        histWeakening: histA.ok ? histA.weakening : false,
+        slope: score
+      }
     };
   }
 
@@ -946,6 +1043,10 @@
     text("bbtips-recomendacao", a.recomendacao);
     text("bbtips-acao", a.acao);
     text("bbtips-nota", a.nota);
+    text("bbtips-bt-status", a.backtest?.status || "juntando memoria...");
+    text("bbtips-bt-over", a.backtest?.over || "--");
+    text("bbtips-bt-btts", a.backtest?.btts || "--");
+    text("bbtips-bt-sinal", a.backtest?.sinal || "AGUARDAR");
     const s = document.getElementById("bbtips-sinal");
     if (s) {
       s.style.color = a.color;
@@ -956,6 +1057,8 @@
       const value = String(a.recomendacao || "");
       rec.style.color = value.includes("ENTRAR") || value.includes("BOM") ? "#00ff66" : value.includes("EVITAR") ? "#ff4d5f" : "#ffd54a";
     }
+    const bt = document.getElementById("bbtips-bt-sinal");
+    if (bt) bt.style.color = a.backtest?.color || "#ffd54a";
   }
 
   function text(id, value) {
