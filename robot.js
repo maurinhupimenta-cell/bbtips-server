@@ -1885,16 +1885,19 @@ window.BBTipsRobo={analyze,config:CONFIG,exportar:exportHistory,historico:loadSt
 
     for (let i = byX.length - 1; i >= 0; i -= 1) {
       const col = byX[i];
-      const preferred = col.blueYs.length ? col.blueYs : col.whiteYs.length ? col.whiteYs : col.dotYs;
+      const priceYs = col.dotYs.length ? col.dotYs : col.whiteYs;
+      const preferred = priceYs.length ? priceYs : col.blueYs;
       let y = null;
 
       if (lastY == null) {
         if (col.x < rightStart) continue;
+        if (!priceYs.length) continue;
         y = median(preferred);
       } else {
-        const all = col.blueYs.concat(col.whiteYs, col.dotYs);
-        y = nearest(all, lastY);
-        if (Math.abs(y - lastY) > 90 && col.blueYs.length) y = nearest(col.blueYs, lastY);
+        const all = col.dotYs.concat(col.whiteYs, col.blueYs);
+        const priceNear = nearest(priceYs, lastY);
+        const allNear = nearest(all, lastY);
+        y = priceNear != null && Math.abs(priceNear - lastY) <= 95 ? priceNear : allNear;
       }
 
       if (y == null) continue;
@@ -1904,7 +1907,7 @@ window.BBTipsRobo={analyze,config:CONFIG,exportar:exportHistory,historico:loadSt
     }
 
     const result = out.reverse();
-    return result.length >= 20 ? result : byX.map((col) => ({ x: col.x, y: median(col.blueYs.length ? col.blueYs : col.whiteYs.length ? col.whiteYs : col.dotYs) })).filter((p) => p.y != null);
+    return result.length >= 20 ? result : byX.map((col) => ({ x: col.x, y: median(col.dotYs.length ? col.dotYs : col.whiteYs.length ? col.whiteYs : col.blueYs) })).filter((p) => p.y != null);
   }
 
   function readHistogram(el) {
