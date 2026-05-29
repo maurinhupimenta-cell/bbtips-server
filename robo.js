@@ -1705,8 +1705,18 @@ window.BBTipsRobo={analyze,config:CONFIG,exportar:exportHistory,historico:loadSt
     const market = analyzeBTTSandOver(goalsData);
     const focusedPoints = focusRightEdge(points);
     const a = analyze(focusedPoints, hist, market, points);
-    a.backtest = analyzeVisualBacktest(a.graphState);
-    rememberPattern(goalsData, a.graphState);
+    try {
+      a.backtest = analyzeVisualBacktest(a.graphState);
+      rememberPattern(goalsData, a.graphState);
+    } catch (e) {
+      a.backtest = {
+        status: "erro isolado",
+        over: "--",
+        btts: "--",
+        sinal: "BACKTEST PAUSADO",
+        color: "#ffd54a"
+      };
+    }
     write(a);
     draw(chart, focusedPoints, a, histChart);
   }
