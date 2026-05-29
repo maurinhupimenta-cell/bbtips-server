@@ -1716,18 +1716,61 @@ window.BBTipsRobo={analyze,config:CONFIG,exportar:exportHistory,historico:loadSt
   }
 
   function chartCandidates() {
-    return Array.from(document.querySelectorAll("canvas,svg"))
+    const graphicCandidates = deepQuery("canvas,svg")
       .filter((el) => !String(el.id || "").startsWith("bbtips-robo"))
       .filter((el) => !el.closest("#bbtips-robo-root"))
       .map((el) => ({ el, r: el.getBoundingClientRect() }))
-      .filter((x) => x.r.width > 350 && x.r.height > 180 && x.r.bottom > 0 && x.r.right > 0)
+      .filter((x) => x.r.width > 240 && x.r.height > 120 && x.r.bottom > 0 && x.r.right > 0)
       .sort((a, b) => b.r.width * b.r.height - a.r.width * a.r.height);
+    if (graphicCandidates.length) return graphicCandidates;
+
+    const inferred = inferDomPriceChart();
+    return inferred ? [{ el: inferred, r: inferred.getBoundingClientRect() }] : [];
+  }
+
+  function inferDomPriceChart() {
+    const points = readDomPricePoints();
+    if (points.length < 20) return null;
+    const left = Math.max(0, Math.min(...points.map((p) => p.x)) - 28);
+    const right = Math.min(window.innerWidth, Math.max(...points.map((p) => p.x)) + 28);
+    const top = Math.max(0, Math.min(...points.map((p) => p.y)) - 50);
+    const bottom = Math.min(window.innerHeight, Math.max(...points.map((p) => p.y)) + 92);
+    const rect = { left, top, right, bottom, width: right - left, height: bottom - top };
+    return {
+      __bbtipsRegion: true,
+      __bbtipsDomPrice: true,
+      getBoundingClientRect: () => rect
+    };
+  }
+
+  function deepQuery(selector, root = document) {
+    const out = [];
+    const seen = new Set();
+    const visit = (scope) => {
+      if (!scope?.querySelectorAll) return;
+      Array.from(scope.querySelectorAll(selector)).forEach((el) => {
+        if (!seen.has(el)) {
+          seen.add(el);
+          out.push(el);
+        }
+      });
+      Array.from(scope.querySelectorAll("*")).forEach((el) => {
+        if (el.shadowRoot) visit(el.shadowRoot);
+        if (el.tagName === "IFRAME") {
+          try {
+            if (el.contentDocument) visit(el.contentDocument);
+          } catch (e) {}
+        }
+      });
+    };
+    visit(root);
+    return out;
   }
 
   function findHistogramChart(priceChart) {
     if (!priceChart) return null;
     const priceBox = priceChart.getBoundingClientRect();
-    const candidates = Array.from(document.querySelectorAll("canvas,svg"))
+    const candidates = deepQuery("canvas,svg")
       .filter((el) => el !== priceChart)
       .filter((el) => !String(el.id || "").startsWith("bbtips-robo"))
       .filter((el) => !el.closest("#bbtips-robo-root"))
@@ -1778,8 +1821,49 @@ window.BBTipsRobo={analyze,config:CONFIG,exportar:exportHistory,historico:loadSt
   }
 
   function readPoints(el) {
+    if (el.__bbtipsDomPrice) return readDomPricePoints(el);
     if (el.tagName.toLowerCase() === "svg") return readSvg(el);
     return readCanvas(el);
+  }
+
+  function readDomPricePoints(region) {
+    const area = region?.getBoundingClientRect?.();
+    const nodes = Array.from(document.querySelectorAll("text,tspan,div,span"))
+      .filter((node) => !node.closest("#bbtips-robo-root"))
+      .filter((node) => !String(node.id || "").startsWith("bbtips-robo"))
+      .map((node) => {
+        const text = (node.textContent || "").trim();
+        const value = Number(text);
+        const r = node.getBoundingClientRect();
+        return { node, text, value, r };
+      })
+      .filter((item) => Number.isFinite(item.value) && item.value >= 0 && item.value <= 100)
+      .filter((item) => String(item.value) === item.text || String(Math.round(item.value)) === item.text)
+      .filter((item) => item.r.width > 5 && item.r.width < 46 && item.r.height > 6 && item.r.height < 34)
+      .filter((item) => item.r.bottom > 0 && item.r.right > 0 && item.r.top < window.innerHeight)
+      .filter((item) => item.r.left > 8 && item.r.right < window.innerWidth - 42)
+      .filter((item) => !area || (item.r.left >= area.left && item.r.right <= area.right && item.r.top >= area.top && item.r.bottom <= area.bottom))
+      .filter((item) => {
+        const color = getComputedStyle(item.node).color.match(/\d+/g)?.map(Number) || [];
+        return color[0] > 185 && color[1] > 185 && color[2] > 185;
+      })
+      .map((item) => ({
+        x: item.r.left + item.r.width / 2,
+        y: item.r.top + item.r.height + 4,
+        v: item.value
+      }))
+      .sort((a, b) => a.x - b.x || a.y - b.y);
+
+    const compact = [];
+    for (const point of nodes) {
+      const prev = compact[compact.length - 1];
+      if (prev && Math.abs(prev.x - point.x) < 8) {
+        if (point.y < prev.y) compact[compact.length - 1] = point;
+      } else {
+        compact.push(point);
+      }
+    }
+    return compact.map(({ x, y }) => ({ x, y }));
   }
 
   function readSvg(svg) {
