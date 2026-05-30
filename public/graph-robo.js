@@ -724,30 +724,36 @@
 
   function rememberPattern(goalsData, graphState) {
     if (!goalsData?.length || !graphState) return;
-    const lastGoal = goalsData[goalsData.length - 1];
-    const key = [lastGoal.score, lastGoal.total, lastGoal.btts ? 1 : 0, lastGoal.over25 ? 1 : 0].join("|");
-    const last = readJson(LAST_PATTERN_KEY, {});
-    if (last.key === key && Date.now() - Number(last.ts || 0) < 55000) return;
-
     const history = readPatternHistory();
-    history.push({
-      key,
-      ts: Date.now(),
-      zonePct: graphState.zonePct,
-      force: graphState.force,
-      histPositive: graphState.histPositive,
-      histWeakening: graphState.histWeakening,
-      slope: graphState.slope,
-      result: {
-        total: lastGoal.total,
-        btts: lastGoal.btts,
-        over25: lastGoal.over25,
-        score: lastGoal.score
-      }
+    const seen = new Set(history.map((item) => item.key));
+    let added = 0;
+
+    goalsData.forEach((goal, index) => {
+      const key = goal.key || [index, goal.score, goal.total, goal.btts ? 1 : 0, goal.over25 ? 1 : 0].join("|");
+      if (seen.has(key)) return;
+      seen.add(key);
+      added += 1;
+      history.push({
+        key,
+        ts: Date.now(),
+        zonePct: graphState.zonePct,
+        force: graphState.force,
+        histPositive: graphState.histPositive,
+        histWeakening: graphState.histWeakening,
+        slope: graphState.slope,
+        result: {
+          total: goal.total,
+          btts: goal.btts,
+          over25: goal.over25,
+          score: goal.score
+        }
+      });
     });
+
+    if (!added) return;
     while (history.length > 80) history.shift();
     safeSetJson(PATTERN_HISTORY_KEY, history);
-    safeSetJson(LAST_PATTERN_KEY, { key, ts: Date.now() });
+    safeSetJson(LAST_PATTERN_KEY, { added, ts: Date.now() });
   }
 
   function analyzeVisualBacktest(graphState) {
