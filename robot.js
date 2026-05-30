@@ -1617,6 +1617,11 @@ window.BBTipsRobo={analyze,config:CONFIG,exportar:exportHistory,historico:loadSt
     panel.style.setProperty("width", minimized ? "260px" : "300px", "important");
   }
 
+  function setGraphPanelActive(active) {
+    if (panel) panel.style.setProperty("display", active ? "block" : "none", "important");
+    if (canvas) canvas.style.setProperty("display", active ? "block" : "none", "important");
+  }
+
   function readJson(key, fallback) {
     try {
       return JSON.parse(localStorage.getItem(key)) || fallback;
@@ -1653,29 +1658,12 @@ window.BBTipsRobo={analyze,config:CONFIG,exportar:exportHistory,historico:loadSt
 
     const chart = biggestChart();
     if (!chart) {
-      write({
-        status: "nenhum canvas/svg grande encontrado",
-        sinal: "SEM GRAFICO",
-        color: "#ffd54a",
-        forca: "--",
-        zona: "--",
-        direcao: "--",
-        virada: "--",
-        pagamento: "--",
-        pgtoScore: "--",
-        hist: "--",
-        btts: "--",
-        over: "--",
-        gols: "--",
-        seq: "--",
-        recomendacao: "SEM GRAFICO",
-        acao: "Abrir grafico",
-        nota: "O robo esta ligado, mas ainda nao encontrou o grafico principal nesta tela."
-      });
+      setGraphPanelActive(false);
       clearDraw();
       return;
     }
 
+    setGraphPanelActive(true);
     const points = readPoints(chart);
     if (points.length < 20) {
       write({
