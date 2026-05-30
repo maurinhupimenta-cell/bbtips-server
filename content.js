@@ -28,6 +28,7 @@ function removeRobotPanel() {
       document.getElementById('hb-tips-scanner')?.remove();
       document.getElementById('bbtips-robo-root')?.remove();
       document.getElementById('bbtips-robo-canvas')?.remove();
+      document.getElementById('bbtips-robo-desenho')?.remove();
       document.getElementById('bbtips-marker-handle')?.remove();
     } catch(e) {}
   `;
