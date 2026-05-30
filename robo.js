@@ -1480,12 +1480,14 @@ window.BBTipsRobo={analyze,config:CONFIG,exportar:exportHistory,historico:loadSt
   const RIGHT_FOCUS_RATIO = 0.34;
   const LOOP_MS = 2600;
   const SLOW_SCAN_MS = 6500;
+  const SCORE_RE = /(?:^|[^\d])(\d{1,2})\s*[-xX]\s*(\d{1,2})(?=$|[^\d])/g;
   let panel;
   let canvas;
   let dragging = null;
   let cachedHistChart = null;
   let cachedHist = [];
   let cachedMarket = null;
+  let patternMemory = [];
   let lastSlowScan = 0;
 
   function ready(fn) {
@@ -1706,8 +1708,8 @@ window.BBTipsRobo={analyze,config:CONFIG,exportar:exportHistory,historico:loadSt
     const focusedPoints = focusRightEdge(points);
     const a = analyze(focusedPoints, hist, market, points);
     try {
-      a.backtest = analyzeVisualBacktest(a.graphState);
       rememberPattern(goalsData, a.graphState);
+      a.backtest = analyzeVisualBacktest(a.graphState);
     } catch (e) {
       a.backtest = {
         status: "erro isolado",
@@ -2104,28 +2106,34 @@ window.BBTipsRobo={analyze,config:CONFIG,exportar:exportHistory,historico:loadSt
   }
 
   function readMatchGoals() {
-    const candidates = Array.from(document.querySelectorAll("text,tspan,div,span"))
+    const domGoals = readDomMatchGoals();
+    if (domGoals.length >= 8) return domGoals;
+
+    const storedGoals = readStoredMatchGoals();
+    if (storedGoals.length >= 8) return storedGoals;
+
+    return domGoals.length ? domGoals : storedGoals;
+  }
+
+  function readDomMatchGoals() {
+    const candidates = Array.from(document.querySelectorAll("text,tspan,span,div,td"))
       .map((el) => {
-        const text = (el.textContent || "").trim().replace(/\s+/g, " ");
+        if (el.closest?.("#bbtips-robo-root,#bbtips-final-robo")) return null;
+        if (el.closest?.("script,style,noscript,button,input,select,textarea")) return null;
         const box = el.getBoundingClientRect();
-        return { text, box };
-      })
-      .filter((item) => item.box.width > 0 && item.box.height > 0)
-      .filter((item) => item.box.bottom > 0 && item.box.right > 0)
-      .map((item) => {
-        const match = item.text.match(/(?:^|\D)(\d{1,2})\s*[-xX]\s*(\d{1,2})(?:\D|$)/);
-        if (!match) return null;
-        const home = Number(match[1]);
-        const away = Number(match[2]);
-        if (!Number.isFinite(home) || !Number.isFinite(away)) return null;
+        if (!isVisibleBox(el, box)) return null;
+        const text = scoreTextFromNode(el);
+        const score = parseScoreText(text);
+        if (!score) return null;
         return {
-          key: Math.round(item.box.left) + ":" + Math.round(item.box.top) + ":" + home + "x" + away,
-          x: item.box.left + item.box.width / 2,
-          y: item.box.top + item.box.height / 2,
-          total: home + away,
-          btts: home > 0 && away > 0,
-          over25: home + away >= 3,
-          score: home + "x" + away
+          key: Math.round(box.left) + ":" + Math.round(box.top) + ":" + score.a + "x" + score.b,
+          x: box.left + box.width / 2,
+          y: box.top + box.height / 2,
+          area: box.width * box.height,
+          total: score.t,
+          btts: score.a > 0 && score.b > 0,
+          over25: score.t >= 3,
+          score: score.a + "x" + score.b
         };
       })
       .filter(Boolean);
@@ -2133,15 +2141,107 @@ window.BBTipsRobo={analyze,config:CONFIG,exportar:exportHistory,historico:loadSt
     const unique = [];
     const seen = new Set();
     candidates
-      .sort((a, b) => a.x - b.x || a.y - b.y)
+      .sort((a, b) => a.x - b.x || a.y - b.y || a.area - b.area)
       .forEach((item) => {
-        const bucket = Math.round(item.x / 10) + ":" + item.score;
+        const bucket = Math.round(item.x / 16) + ":" + Math.round(item.y / 12) + ":" + item.score;
         if (seen.has(bucket)) return;
         seen.add(bucket);
         unique.push(item);
       });
 
     return unique.slice(-20);
+  }
+
+  function isVisibleBox(el, box) {
+    if (!box || box.width < 4 || box.height < 4) return false;
+    if (box.bottom <= 0 || box.right <= 0 || box.top >= window.innerHeight || box.left >= window.innerWidth) return false;
+    const style = getComputedStyle(el);
+    return style.display !== "none" && style.visibility !== "hidden" && Number(style.opacity || 1) > 0.05;
+  }
+
+  function scoreTextFromNode(el) {
+    const direct = Array.from(el.childNodes || [])
+      .filter((node) => node.nodeType === Node.TEXT_NODE)
+      .map((node) => node.nodeValue || "")
+      .join(" ")
+      .trim()
+      .replace(/\s+/g, " ");
+    const text = direct || (el.children?.length ? "" : (el.textContent || ""));
+    return String(text || "").trim().replace(/\s+/g, " ");
+  }
+
+  function parseScoreText(text) {
+    if (!text || text.length > 80) return null;
+    SCORE_RE.lastIndex = 0;
+    const matches = Array.from(String(text).matchAll(SCORE_RE));
+    if (matches.length !== 1) return null;
+    const a = Number(matches[0][1]);
+    const b = Number(matches[0][2]);
+    if (!Number.isFinite(a) || !Number.isFinite(b) || a > 12 || b > 12) return null;
+    return { a, b, t: a + b };
+  }
+
+  function readStoredMatchGoals() {
+    const rows = [];
+    const addRows = (value) => {
+      if (Array.isArray(value)) rows.push(...value);
+    };
+
+    try { addRows(window.BBTipsRobo?.historico?.()); } catch (e) {}
+    addRows(readJson("BBTIPS_FINAL_RESULTADOS_HIST_V1", []));
+    addRows(readJson("BBTIPS_FINAL_API_ROWS_V2", []));
+
+    const seen = new Set();
+    const goals = [];
+    rows.forEach((row, index) => {
+      if (!row || row.future) return;
+      const score = scoreFromStoredRow(row);
+      if (!score) return;
+      const name = String(row.name || row.Nome || row.jogo || row.Jogo || "").toLowerCase().replace(/\s+/g, " ").trim();
+      const time = String(row.time || row.Horario || row.horario || row.Hora || row.hora || "");
+      const key = [time, name, score.a + "-" + score.b].join("|");
+      if (seen.has(key)) return;
+      seen.add(key);
+      goals.push({
+        key,
+        x: index,
+        y: 0,
+        age: resultAgeFromTime(time, index),
+        total: score.t,
+        btts: score.a > 0 && score.b > 0,
+        over25: score.t >= 3,
+        score: score.a + "x" + score.b
+      });
+    });
+
+    return goals
+      .sort((a, b) => a.age - b.age)
+      .slice(0, 20)
+      .reverse()
+      .map(({ age, ...goal }) => goal);
+  }
+
+  function scoreFromStoredRow(row) {
+    const raw = row.score || row.Resultado || row.resultado || row.Placar || row.placar || "";
+    if (raw && typeof raw === "object") {
+      const a = Number(raw.a ?? raw.home ?? raw.casa ?? raw.Casa);
+      const b = Number(raw.b ?? raw.away ?? raw.fora ?? raw.Fora);
+      if (Number.isFinite(a) && Number.isFinite(b)) return { a, b, t: a + b };
+    }
+    return parseScoreText(String(raw));
+  }
+
+  function resultAgeFromTime(time, fallback) {
+    const match = String(time || "").match(/^(\d{1,2})[.:](\d{2})$/);
+    if (!match) return 99999 + fallback / 1000;
+    const h = Number(match[1]);
+    const m = Number(match[2]);
+    if (!Number.isFinite(h) || !Number.isFinite(m)) return 99999 + fallback / 1000;
+    const nowDate = new Date();
+    const now = nowDate.getHours() * 60 + nowDate.getMinutes();
+    let age = now - (h * 60 + m);
+    if (age < 0) age += 1440;
+    return age;
   }
 
   function analyzeBTTSandOver(goalsData) {
@@ -2279,12 +2379,12 @@ window.BBTipsRobo={analyze,config:CONFIG,exportar:exportHistory,historico:loadSt
   }
 
   function readPatternHistory() {
-    const raw = readJson(PATTERN_HISTORY_KEY, []);
+    const raw = readJson(PATTERN_HISTORY_KEY, patternMemory);
     if (!Array.isArray(raw)) {
       localStorage.removeItem(PATTERN_HISTORY_KEY);
       return [];
     }
-    return raw.filter((item) =>
+    const clean = raw.filter((item) =>
       item &&
       Number.isFinite(Number(item.zonePct)) &&
       Number.isFinite(Number(item.force)) &&
@@ -2293,13 +2393,16 @@ window.BBTipsRobo={analyze,config:CONFIG,exportar:exportHistory,historico:loadSt
       typeof item.result.over25 === "boolean" &&
       typeof item.result.btts === "boolean"
     );
+    patternMemory = clean.slice(-80);
+    return patternMemory;
   }
 
   function safeSetJson(key, value) {
+    if (key === PATTERN_HISTORY_KEY && Array.isArray(value)) patternMemory = value.slice(-80);
     try {
       localStorage.setItem(key, JSON.stringify(value));
     } catch (e) {
-      localStorage.removeItem(key);
+      try { localStorage.removeItem(key); } catch (x) {}
     }
   }
 
