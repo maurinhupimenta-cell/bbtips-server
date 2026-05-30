@@ -1547,7 +1547,8 @@ window.BBTipsRobo={analyze,config:CONFIG,exportar:exportHistory,historico:loadSt
       '<div style="margin-top:10px;padding:10px;background:rgba(0,255,102,.08);border:1px solid rgba(0,255,102,.26);border-radius:8px;font-size:12px;line-height:1.45">',
       '<strong style="color:#00ff66;font-size:13px">AMBAS + OVER</strong><br>',
       'BTTS(8): <span id="bbtips-btts" style="font-weight:800">--</span> | ',
-      'Over(8): <span id="bbtips-over" style="font-weight:800">--</span><br>',
+      'O2.5(8): <span id="bbtips-over" style="font-weight:800">--</span><br>',
+      'O3.5(8): <span id="bbtips-over35" style="font-weight:800">--</span> | ',
       'Media gols: <span id="bbtips-gols" style="font-weight:800">--</span> | ',
       'Seq: <span id="bbtips-seq" style="font-weight:800">--</span><br>',
       '<span id="bbtips-recomendacao" style="display:block;margin-top:4px;font-weight:900;font-size:15px;color:#ffd54a">AGUARDAR</span>',
@@ -1555,7 +1556,8 @@ window.BBTipsRobo={analyze,config:CONFIG,exportar:exportHistory,historico:loadSt
       '<div style="margin-top:10px;padding:10px;background:rgba(255,213,74,.08);border:1px solid rgba(255,213,74,.35);border-radius:8px;font-size:12px;line-height:1.45">',
       '<strong style="color:#ffd54a;font-size:13px">BACKTEST VISUAL</strong><br>',
       '<span id="bbtips-bt-status">juntando memoria...</span><br>',
-      'Over: <span id="bbtips-bt-over" style="font-weight:800">--</span> | ',
+      'O2.5: <span id="bbtips-bt-over" style="font-weight:800">--</span> | ',
+      'O3.5: <span id="bbtips-bt-over35" style="font-weight:800">--</span><br>',
       'Ambas: <span id="bbtips-bt-btts" style="font-weight:800">--</span><br>',
       '<span id="bbtips-bt-sinal" style="display:block;margin-top:4px;font-weight:900;color:#ffd54a">AGUARDAR</span>',
       "</div>",
@@ -1698,6 +1700,7 @@ window.BBTipsRobo={analyze,config:CONFIG,exportar:exportHistory,historico:loadSt
     try {
       rememberPattern(goalsData, a.graphState);
       a.backtest = analyzeVisualBacktest(a.graphState);
+      applyBacktestCaution(a);
     } catch (e) {
       a.backtest = {
         status: "erro isolado",
@@ -1709,6 +1712,24 @@ window.BBTipsRobo={analyze,config:CONFIG,exportar:exportHistory,historico:loadSt
     }
     write(a);
     draw(chart, focusedPoints, a, histChart);
+  }
+
+  function applyBacktestCaution(a) {
+    const rec = String(a.recomendacao || "");
+    const bt = String(a.backtest?.sinal || "");
+    const goodRecent = rec.includes("ENTRAR") || rec.includes("BOM");
+    const badBacktest = bt.includes("RUIM") || bt.includes("EVITAR");
+    const goodBacktest = bt.includes("BOM");
+    const graphAgainst = String(a.direcao || "").includes("Descendo") && !String(a.sinal || "").includes("PAGAR");
+
+    if (goodRecent && (badBacktest || graphAgainst)) {
+      a.recomendacao = badBacktest ? "AGUARDAR (BT RUIM)" : "AGUARDAR (GRAFICO CONTRA)";
+      return;
+    }
+
+    if (rec === "AGUARDAR" && goodBacktest && !graphAgainst) {
+      a.recomendacao = bt.includes("O3.5") ? "OBSERVAR OVER 3.5" : "OBSERVAR OVER";
+    }
   }
 
   function biggestChart() {
@@ -2121,6 +2142,7 @@ window.BBTipsRobo={analyze,config:CONFIG,exportar:exportHistory,historico:loadSt
           total: score.t,
           btts: score.a > 0 && score.b > 0,
           over25: score.t >= 3,
+          over35: score.t >= 4,
           score: score.a + "x" + score.b
         };
       })
@@ -2198,6 +2220,7 @@ window.BBTipsRobo={analyze,config:CONFIG,exportar:exportHistory,historico:loadSt
         total: score.t,
         btts: score.a > 0 && score.b > 0,
         over25: score.t >= 3,
+        over35: score.t >= 4,
         score: score.a + "x" + score.b
       });
     });
@@ -2238,9 +2261,11 @@ window.BBTipsRobo={analyze,config:CONFIG,exportar:exportHistory,historico:loadSt
         ok: false,
         btts8: "--",
         over8: "--",
+        over35: "--",
         mediaGols: "--",
         sequenciaBTTS: 0,
         sequenciaOver: 0,
+        sequenciaOver35: 0,
         recomendacao: "SEM PLACARES"
       };
     }
@@ -2248,13 +2273,17 @@ window.BBTipsRobo={analyze,config:CONFIG,exportar:exportHistory,historico:loadSt
     const last8 = goalsData.slice(-8);
     const btts8n = (last8.filter((g) => g.btts).length / last8.length) * 100;
     const over8n = (last8.filter((g) => g.over25).length / last8.length) * 100;
+    const over35n = (last8.filter((g) => g.over35).length / last8.length) * 100;
     const avgGoals = last8.reduce((sum, g) => sum + g.total, 0) / last8.length;
     const sequenciaBTTS = getStreak(goalsData, "btts");
     const sequenciaOver = getStreak(goalsData, "over25");
+    const sequenciaOver35 = getStreak(goalsData, "over35");
 
     let recomendacao = "AGUARDAR";
     if (btts8n > 75 && over8n > 70 && avgGoals > 3.2 && sequenciaBTTS >= 3) {
       recomendacao = "ENTRAR AMBAS + OVER";
+    } else if (over35n >= 50 && over8n >= 62 && avgGoals >= 3.05) {
+      recomendacao = "BOM PARA OVER 3.5";
     } else if (btts8n > 65 && over8n > 62 && avgGoals > 2.8) {
       recomendacao = "BOM PARA AMBAS/OVER";
     } else if (btts8n < 45 || over8n < 50 || avgGoals < 2.35) {
@@ -2265,9 +2294,11 @@ window.BBTipsRobo={analyze,config:CONFIG,exportar:exportHistory,historico:loadSt
       ok: true,
       btts8: Math.round(btts8n) + "%",
       over8: Math.round(over8n) + "%",
+      over35: Math.round(over35n) + "%",
       mediaGols: avgGoals.toFixed(2),
       sequenciaBTTS,
       sequenciaOver,
+      sequenciaOver35,
       recomendacao
     };
   }
@@ -2275,7 +2306,7 @@ window.BBTipsRobo={analyze,config:CONFIG,exportar:exportHistory,historico:loadSt
   function getStreak(data, type) {
     let streak = 0;
     for (let i = data.length - 1; i >= 0; i -= 1) {
-      if ((type === "btts" && data[i].btts) || (type === "over25" && data[i].over25)) streak += 1;
+      if ((type === "btts" && data[i].btts) || (type === "over25" && data[i].over25) || (type === "over35" && data[i].over35)) streak += 1;
       else break;
     }
     return streak;
@@ -2304,6 +2335,7 @@ window.BBTipsRobo={analyze,config:CONFIG,exportar:exportHistory,historico:loadSt
           total: goal.total,
           btts: goal.btts,
           over25: goal.over25,
+          over35: goal.over35,
           score: goal.score
         }
       });
@@ -2318,7 +2350,7 @@ window.BBTipsRobo={analyze,config:CONFIG,exportar:exportHistory,historico:loadSt
   function analyzeVisualBacktest(graphState) {
     const history = readPatternHistory();
     if (!graphState || history.length < 8) {
-      return { status: history.length + "/8 amostras", over: "--", btts: "--", sinal: "MEMORIA INSUFICIENTE", color: "#ffd54a" };
+      return { status: history.length + "/8 amostras", over: "--", over35: "--", btts: "--", sinal: "MEMORIA INSUFICIENTE", color: "#ffd54a" };
     }
 
     const similar = history
@@ -2329,18 +2361,23 @@ window.BBTipsRobo={analyze,config:CONFIG,exportar:exportHistory,historico:loadSt
       .map((x) => x.item);
 
     if (similar.length < 4) {
-      return { status: "similares " + similar.length + " de " + history.length, over: "--", btts: "--", sinal: "SEM PADRAO FORTE", color: "#ffd54a" };
+      return { status: "similares " + similar.length + " de " + history.length, over: "--", over35: "--", btts: "--", sinal: "SEM PADRAO FORTE", color: "#ffd54a" };
     }
 
     const overWins = similar.filter((x) => x.result?.over25).length;
+    const over35Wins = similar.filter((x) => x.result?.over35).length;
     const bttsWins = similar.filter((x) => x.result?.btts).length;
     const overPct = Math.round((overWins / similar.length) * 100);
+    const over35Pct = Math.round((over35Wins / similar.length) * 100);
     const bttsPct = Math.round((bttsWins / similar.length) * 100);
     let sinal = "AGUARDAR";
     let color = "#ffd54a";
 
     if (overPct >= 70 && bttsPct >= 55 && graphState.force >= 40 && graphState.zonePct < 75 && (graphState.histPositive || !graphState.histWeakening)) {
       sinal = "PADRAO BOM OVER";
+      color = "#00ff66";
+    } else if (over35Pct >= 50 && overPct >= 65 && graphState.force >= 35 && graphState.zonePct < 78) {
+      sinal = "PADRAO BOM O3.5";
       color = "#00ff66";
     } else if (overPct <= 42 || (graphState.zonePct > 75 && graphState.histWeakening)) {
       sinal = "PADRAO RUIM / EVITAR";
@@ -2350,6 +2387,7 @@ window.BBTipsRobo={analyze,config:CONFIG,exportar:exportHistory,historico:loadSt
     return {
       status: "similares " + similar.length + " de " + history.length,
       over: overWins + "/" + similar.length + " " + overPct + "%",
+      over35: over35Wins + "/" + similar.length + " " + over35Pct + "%",
       btts: bttsWins + "/" + similar.length + " " + bttsPct + "%",
       sinal,
       color
@@ -2372,15 +2410,23 @@ window.BBTipsRobo={analyze,config:CONFIG,exportar:exportHistory,historico:loadSt
       localStorage.removeItem(PATTERN_HISTORY_KEY);
       return [];
     }
-    const clean = raw.filter((item) =>
-      item &&
-      Number.isFinite(Number(item.zonePct)) &&
-      Number.isFinite(Number(item.force)) &&
-      Number.isFinite(Number(item.slope)) &&
-      item.result &&
-      typeof item.result.over25 === "boolean" &&
-      typeof item.result.btts === "boolean"
-    );
+    const clean = raw
+      .map((item) => {
+        if (!item?.result) return null;
+        const total = Number(item.result.total);
+        const over35 = typeof item.result.over35 === "boolean" ? item.result.over35 : Number.isFinite(total) ? total >= 4 : false;
+        return { ...item, result: { ...item.result, over35 } };
+      })
+      .filter((item) =>
+        item &&
+        Number.isFinite(Number(item.zonePct)) &&
+        Number.isFinite(Number(item.force)) &&
+        Number.isFinite(Number(item.slope)) &&
+        item.result &&
+        typeof item.result.over25 === "boolean" &&
+        typeof item.result.over35 === "boolean" &&
+        typeof item.result.btts === "boolean"
+      );
     patternMemory = clean.slice(-80);
     return patternMemory;
   }
@@ -2592,8 +2638,9 @@ window.BBTipsRobo={analyze,config:CONFIG,exportar:exportHistory,historico:loadSt
       hist: histA.label,
       btts: market?.btts8 || "--",
       over: market?.over8 || "--",
+      over35: market?.over35 || "--",
       gols: market?.mediaGols || "--",
-      seq: market?.ok ? "A" + market.sequenciaBTTS + "/O" + market.sequenciaOver : "--",
+      seq: market?.ok ? "A" + market.sequenciaBTTS + "/O2 " + market.sequenciaOver + "/O3 " + market.sequenciaOver35 : "--",
       recomendacao: market?.recomendacao || "SEM PLACARES",
       acao,
       nota,
@@ -2641,6 +2688,7 @@ window.BBTipsRobo={analyze,config:CONFIG,exportar:exportHistory,historico:loadSt
     text("bbtips-hist", a.hist || "lido");
     text("bbtips-btts", a.btts);
     text("bbtips-over", a.over);
+    text("bbtips-over35", a.over35);
     text("bbtips-gols", a.gols);
     text("bbtips-seq", a.seq);
     text("bbtips-recomendacao", a.recomendacao);
@@ -2648,6 +2696,7 @@ window.BBTipsRobo={analyze,config:CONFIG,exportar:exportHistory,historico:loadSt
     text("bbtips-nota", a.nota);
     text("bbtips-bt-status", a.backtest?.status || "juntando memoria...");
     text("bbtips-bt-over", a.backtest?.over || "--");
+    text("bbtips-bt-over35", a.backtest?.over35 || "--");
     text("bbtips-bt-btts", a.backtest?.btts || "--");
     text("bbtips-bt-sinal", a.backtest?.sinal || "AGUARDAR");
     const s = document.getElementById("bbtips-sinal");
