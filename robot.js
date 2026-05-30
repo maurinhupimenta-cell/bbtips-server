@@ -1856,7 +1856,7 @@ window.BBTipsRobo={analyze,config:CONFIG,exportar:exportHistory,historico:loadSt
       const cols = [];
       const topLimit = Math.round(h * 0.08);
       const bottomLimit = Math.round(h * 0.92);
-      const rightLimit = w - 2;
+      const rightLimit = Math.min(w - 2, Math.round(w * 0.975));
 
       for (let x = 0; x <= rightLimit; x += step) {
         const blueYs = [];
@@ -1870,11 +1870,12 @@ window.BBTipsRobo={analyze,config:CONFIG,exportar:exportHistory,historico:loadSt
           const a = img[i + 3];
           const green = a > 120 && g > 120 && g > r * 1.15 && g > b * 1.05;
           const red = a > 120 && r > 150 && r > g * 1.15 && r > b * 1.15;
+          const yellow = a > 120 && r > 175 && g > 135 && b < 120 && r > b * 1.7 && g > b * 1.35;
           const blue = a > 120 && b > 145 && g > 95 && b > r * 1.1;
           const white = a > 150 && r > 215 && g > 215 && b > 215;
           if (blue) blueYs.push(y);
           else if (white) whiteYs.push(y);
-          else if (green || red) dotYs.push(y);
+          else if (green || red || yellow) dotYs.push(y);
         }
         if (blueYs.length || whiteYs.length || dotYs.length) {
           cols.push({ x, blueYs, whiteYs, dotYs });
@@ -1912,6 +1913,7 @@ window.BBTipsRobo={analyze,config:CONFIG,exportar:exportHistory,historico:loadSt
     if (!cols.length) return [];
     const byX = cols.slice().sort((a, b) => a.x - b.x);
     const rightStart = width * 0.72;
+    const hasColoredRightEdge = byX.some((col) => col.x >= rightStart && col.dotYs.length);
     let lastY = null;
     const out = [];
 
@@ -1923,6 +1925,7 @@ window.BBTipsRobo={analyze,config:CONFIG,exportar:exportHistory,historico:loadSt
 
       if (lastY == null) {
         if (col.x < rightStart) continue;
+        if (hasColoredRightEdge && !col.dotYs.length) continue;
         if (!priceYs.length) continue;
         y = median(preferred);
       } else {
