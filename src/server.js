@@ -334,12 +334,22 @@ app.get("/api/scanner-data", requireUserOrAdmin, async (req, res) => {
     const payload = item.payload || {};
     const payloadRows = Array.isArray(payload.rows) ? payload.rows : [];
     const payloadPlatform = String(payload.platform || "").toUpperCase();
+    const ligaCounts = new Map();
+    for (const payloadRow of payloadRows) {
+      const ligaValue = Number(payloadRow?.liga);
+      if (Number.isFinite(ligaValue) && ligaValue > 0) {
+        ligaCounts.set(ligaValue, (ligaCounts.get(ligaValue) || 0) + 1);
+      }
+    }
+    const majorityLiga = [...ligaCounts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] || null;
+    const payloadLiga = Number(payload.liga) || majorityLiga;
     for (const row of payloadRows) {
       if (!row || typeof row !== "object") continue;
       const rowPlatform = String(row.platform || payloadPlatform || "").toUpperCase();
       if (platform !== "TODAS" && rowPlatform && rowPlatform !== platform) continue;
+      const resolvedLiga = Number(row.liga) || payloadLiga || null;
       const key = String(row.key || [
-        row.liga ?? "",
+        resolvedLiga ?? "",
         row.time ?? "",
         row.name ?? "",
         row.score ? `${row.score.a}-${row.score.b}` : "",
@@ -350,6 +360,7 @@ app.get("/api/scanner-data", requireUserOrAdmin, async (req, res) => {
       seen.add(key);
       out.push({
         ...row,
+        liga: resolvedLiga,
         platform: rowPlatform || null,
         source: "collector",
         collectedAt: item.created_at,
