@@ -23,6 +23,7 @@ let DRAW_PENDING=false;
 let DRAW_TIMER=null;
 let LAST_RESULTS_REFRESH=0;
 let LAST_API_LOAD=0;
+let RESULT_WINDOWS_CACHE={key:"",rows:null};
 const MARKETS=[
   {key:"ambas_sim",name:"Ambas Sim",patterns:[/ambs@?(\d+[,.]\d+)/ig,/ambas\s*sim@?(\d+[,.]\d+)/ig],label:/ambs|ambas\s*sim|ambas\s*marcam/i},
   {key:"ambas_nao",name:"Ambas Nao",patterns:[/ambn@?(\d+[,.]\d+)/ig,/ambas\s*nao@?(\d+[,.]\d+)/ig],label:/ambn|ambas\s*n/i},
@@ -648,8 +649,20 @@ function resultHistoryForMarket(m){
     .filter(r=>r.green!==null);
 }
 function calcResultWindows(m){
+  const first=RESULTS_CACHE[0],last=RESULTS_CACHE[RESULTS_CACHE.length-1];
+  const cacheKey=[
+    m.key,
+    RESULTS_CACHE.length,
+    first?.time||"",
+    first?.name||"",
+    rowScoreText(first),
+    last?.time||"",
+    last?.name||"",
+    rowScoreText(last)
+  ].join("|");
+  if(RESULT_WINDOWS_CACHE.key===cacheKey&&RESULT_WINDOWS_CACHE.rows)return RESULT_WINDOWS_CACHE.rows;
   const hist=resultHistoryForMarket(m);
-  return CONFIG.windows.map(w=>{
+  const rows=CONFIG.windows.map(w=>{
     const arr=hist.slice(0,w);
     const j=arr.length;
     const g=arr.filter(x=>x.green).length;
@@ -668,6 +681,8 @@ function calcResultWindows(m){
     const fundoMin=ready&&min!==null&&pctVal<=min+CONFIG.tol;
     return {w,j,g,p:pctVal,min,ready,fundo30,fundoMin};
   });
+  RESULT_WINDOWS_CACHE={key:cacheKey,rows};
+  return rows;
 }
 function globalFundos(series){
   return calcResultWindows(market()).filter(r=>r.ready&&r.j>=r.w&&(r.fundo30||r.fundoMin));
@@ -1131,32 +1146,9 @@ function scorePullText(stat){
   return `Placar puxa apos ${stat.score}: ${stat.topScores.join(" | ")}${stat.topOdds.length?`<br>Odds: ${stat.topOdds.join(" | ")}`:""}`;
 }
 function statusPayStats(m){
-  const items=[];
-  RESULTS_CACHE.filter(r=>r.score).slice()
-    .sort((a,b)=>resultAge(a)-resultAge(b)||a.top-b.top||a.idx-b.idx)
-    .slice(0,300)
-    .forEach(r=>{
-      const odds=oddsForMarket(r.txt,m);
-      if(!odds.length)return;
-      const g={time:r.time,name:r.name,market:m,odd:odds[0],text:r.txt};
-      const an=analysisForGame(g,[]);
-      if(an.status!=="ENTRAR"&&an.status!=="OBSERVAR")return;
-      items.push({status:an.status,paid:paysMarket(r.score,m),odd:odds[0],time:r.time,name:r.name,score:r.score});
-    });
   const out={ENTRAR:{g:0,j:0,streak:0,last:""},OBSERVAR:{g:0,j:0,streak:0,last:""}};
-  items.forEach(x=>{
-    out[x.status].j++;
-    if(x.paid)out[x.status].g++;
-  });
-  ["ENTRAR","OBSERVAR"].forEach(st=>{
-    for(const x of items.filter(i=>i.status===st)){
-      if(x.paid){
-        out[st].last=`pagou ${x.time||"-"} ${x.name} ${x.score.a}-${x.score.b}`;
-        break;
-      }
-      out[st].streak++;
-    }
-  });
+  out.ENTRAR.last="modo leve: auditoria pesada desligada";
+  out.OBSERVAR.last="modo leve: auditoria pesada desligada";
   return out;
 }
 function statusStatsBox(){
@@ -2368,7 +2360,7 @@ window.BBTipsRobo={analyze,config:CONFIG,exportar:exportHistory,historico:loadSt
       .map((item) => ({ item, score: similarityScore(graphState, item) }))
       .filter((x) => x.score >= 58)
       .sort((a, b) => b.score - a.score)
-      .slice(0, 18)
+      .slice(0, 30)
       .map((x) => x.item);
 
     if (similar.length < MIN_VISUAL_SIMILARS) {
