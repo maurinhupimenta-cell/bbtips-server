@@ -349,6 +349,30 @@ function readGridRowsForTelemetry(){
   });
   return out.sort((a,b)=>(parseTime(a.time)??9999)-(parseTime(b.time)??9999)).slice(0,160);
 }
+function gameRowsForTelemetry(games=[]){
+  const liga=activeLiga();
+  const platform=currentPlatform();
+  return games.filter(g=>g&&g.time&&g.name&&g.market&&g.odd).map((g,i)=>{
+    const odds={};
+    const odd=Math.round(Number(g.odd)*100)/100;
+    odds[g.market.key]=odd;
+    const alias=marketAliases(g.market)[0];
+    if(alias)odds[alias]=odd;
+    return {
+      key:["robot-game",platform,liga||"auto",g.time,g.name,g.market.key,odd].join("|"),
+      liga,
+      time:String(g.time||""),
+      name:String(g.name||""),
+      score:null,
+      odds,
+      future:true,
+      platform,
+      api:g.api?"api-game":"robot-game",
+      idx:i,
+      txt:String(g.text||"").slice(0,500)
+    };
+  });
+}
 function rowsForTelemetry(seed=[]){
   const by={};
   [...API_ROWS,...seed,...readGridRowsForTelemetry()].forEach(r=>{if(r&&typeof r==="object")by[r.key||JSON.stringify([r.liga,r.time,r.name,r.idx])]=r});
@@ -1583,9 +1607,9 @@ function draw(){
   const isMin=P.classList.contains("min");
   loadApiRowsLight();
   refreshResultsCacheLight(isMin?false:false);
-  sendResultadosAgenteLocal();
-  sendAgenteLocal(rowsForTelemetry());
   if(isMin){
+    sendAgenteLocal(rowsForTelemetry());
+    sendResultadosAgenteLocal();
     const ligaAtual=activeLiga();
     P.innerHTML=`<div class="top"><b>BBTips Robo | ${new Date().toLocaleTimeString()} | Liga ${ligaAtual||"auto"} | Mercado ${esc(market().name)} | API ${API_ROWS.length} | Resultados ${RESULTS_CACHE.length} | modo leve</b>
     <span><button id="rb-scan">Atualizar</button><button id="rb-min">Abrir</button><button id="rb-close">Fechar</button></span></div>`;
@@ -1596,6 +1620,8 @@ function draw(){
     return;
   }
   const a=analyze();
+  sendAgenteLocal(rowsForTelemetry(gameRowsForTelemetry(a.games)));
+  sendResultadosAgenteLocal();
   notify(a.signals);
   notifyFundo(a.series);
   notifyTrendUp();

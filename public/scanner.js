@@ -207,9 +207,9 @@ function historyRows(liga, market) {
 
 function upcomingRows(liga, market) {
   return uniqueRows(state.rows)
-    .filter(row => Number(row.liga) === Number(liga) && row.future && !row.score && oddsForMarket(row, market).length)
+    .filter(row => Number(row.liga) === Number(liga) && row.future && !row.score && (row.name || row.time))
     .sort((a, b) => futureDistance(a) - futureDistance(b))
-    .slice(0, 12);
+    .slice(0, 20);
 }
 
 function pct(rows, market) {
@@ -264,7 +264,7 @@ function weightedProb(lineP, team, odd) {
 }
 
 function analyzeGame(row, history, line, market) {
-  const oddValue = oddsForMarket(row, market)[0];
+  const oddValue = oddsForMarket(row, market)[0] || null;
   const line480 = line.find(item => item.w === 480) || line.find(item => item.p !== null) || {};
   const team = teamPayPct(row, history, market);
   const odd = oddPayPct(oddValue, history, market);
@@ -276,7 +276,9 @@ function analyzeGame(row, history, line, market) {
   const coldOdd = odd && odd.j >= MIN_SAMPLE && odd.p < MIN_ODD_PCT;
   let status = "SEM BASE";
   let rank = 0;
-  if (coldOdd) {
+  if (!oddValue) {
+    status = "SEM ODD";
+  } else if (coldOdd) {
     status = "ODD FRIA";
     rank = 1;
   } else if (ev !== null && ev < 0) {
