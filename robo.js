@@ -14,6 +14,7 @@ clearInterval(window[TIMER]);
 ["bbtips-api-alertas","bbtips-intercepta-api","hb-multi","hb-tips-scanner"].forEach(id=>document.getElementById(id)?.remove());
 
 const CONFIG={market:"over25",tol:0.8,minEV:3,minProb:52,minOddPct:45,minOddSample:30,minTeamSample:30,maxProximos:6,intervalMs:25000,windows:[120,240,480,960],ligas:[1,2,3,4,5,6],ligaAuto:true,horas:"Horas3",filtros:"o15,o25,u25,ambs,ambn,o35,u15,u35,ge5,tgv5,tgc5,ftc,fte,ftv"};
+const SCHEDULE_TIME_ZONE="Europe/London";
 let PANEL_HOVER=false;
 let TOOLTIP_SERIES=[];
 let RESULTS_CACHE=[];
@@ -112,10 +113,19 @@ function parseTime(v){
   const h=Number(m[1]),mi=Number(m[2]);
   return h>=0&&h<24&&mi>=0&&mi<60?h*60+mi:null;
 }
+function scheduleNowMinute(){
+  try{
+    const parts=new Intl.DateTimeFormat("en-GB",{timeZone:SCHEDULE_TIME_ZONE,hour:"2-digit",minute:"2-digit",hourCycle:"h23"}).formatToParts(new Date());
+    const h=Number(parts.find(p=>p.type==="hour")?.value),m=Number(parts.find(p=>p.type==="minute")?.value);
+    if(Number.isFinite(h)&&Number.isFinite(m))return h*60+m;
+  }catch(e){}
+  const d=new Date();
+  return d.getHours()*60+d.getMinutes();
+}
 function isFuture(v){
   const hm=parseTime(v);
   if(hm===null)return true;
-  const d=new Date(),now=d.getHours()*60+d.getMinutes();
+  const now=scheduleNowMinute();
   let diff=hm-now;
   if(diff<-720)diff+=1440;
   return diff>=0&&diff<=720;
@@ -1200,7 +1210,7 @@ function refreshResultsCache(){
 function resultAge(r){
   const hm=parseTime(r.time);
   if(hm===null)return 99999+(r.top||0)+(r.idx||0)/1000;
-  const d=new Date(),now=d.getHours()*60+d.getMinutes();
+  const now=scheduleNowMinute();
   let age=now-hm;
   if(age<0)age+=1440;
   return age;

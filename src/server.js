@@ -13,6 +13,7 @@ const jwtSecret = process.env.JWT_SECRET || "troque-essa-chave";
 const adminUser = process.env.ADMIN_USER || "admin";
 const adminPass = process.env.ADMIN_PASS || "admin123";
 const scannerApiCache = new Map();
+const scannerScheduleTimeZone = "Europe/London";
 
 if (!process.env.DATABASE_URL) {
   console.warn("DATABASE_URL nao definido. No Railway, adicione um Postgres ao projeto.");
@@ -128,6 +129,39 @@ function scannerTime(row, line) {
   if (String(h).match(/^\d{1,2}[.:]\d{2}$/)) return String(h).replace(":", ".");
   if (h !== "" && min !== undefined) return `${Number(h)}.${String(min).padStart(2, "0")}`;
   return String(h || "");
+}
+
+function scannerParseTime(value) {
+  const match = String(value || "").trim().match(/^(\d{1,2})[.:](\d{2})$/);
+  if (!match) return null;
+  const h = Number(match[1]);
+  const m = Number(match[2]);
+  return h >= 0 && h < 24 && m >= 0 && m < 60 ? h * 60 + m : null;
+}
+
+function scannerScheduleNowMinute() {
+  try {
+    const parts = new Intl.DateTimeFormat("en-GB", {
+      timeZone: scannerScheduleTimeZone,
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23"
+    }).formatToParts(new Date());
+    const h = Number(parts.find(part => part.type === "hour")?.value);
+    const m = Number(parts.find(part => part.type === "minute")?.value);
+    if (Number.isFinite(h) && Number.isFinite(m)) return h * 60 + m;
+  } catch (_error) {}
+  const d = new Date();
+  return d.getHours() * 60 + d.getMinutes();
+}
+
+function scannerIsFutureTime(value) {
+  const minute = scannerParseTime(value);
+  if (minute === null) return true;
+  const now = scannerScheduleNowMinute();
+  let diff = minute - now;
+  if (diff < -720) diff += 1440;
+  return diff >= 0 && diff <= 720;
 }
 
 function scannerNormalize(value) {
@@ -387,6 +421,7 @@ app.get("/api/scanner-data", requireUserOrAdmin, async (req, res) => {
     for (const row of payloadRows) {
       if (!row || typeof row !== "object" || row.score || !row.future) continue;
       if (!scannerVisibleFutureSource(row)) continue;
+      if (!scannerIsFutureTime(row.time)) continue;
       const rowPlatform = String(row.platform || payloadPlatform || "").toUpperCase();
       const rawRowHoursValue = row.hours === undefined || row.hours === null ? "" : String(row.hours);
       const rawRowHours = normalizeScannerHours(row.hours);
@@ -442,6 +477,7 @@ app.get("/api/scanner-data", requireUserOrAdmin, async (req, res) => {
       if (!resolvedLiga) continue;
       if (row.future && !row.score) {
         if (!scannerVisibleFutureSource(row)) continue;
+        if (!scannerIsFutureTime(row.time)) continue;
         const latestFutureMs = latestFutureMsByLiga.get(resolvedLiga);
         if (!latestFutureMs || new Date(item.created_at).getTime() !== latestFutureMs) continue;
       }

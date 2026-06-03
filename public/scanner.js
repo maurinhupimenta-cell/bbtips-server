@@ -1,4 +1,5 @@
 const API_BASE = location.origin;
+const SCHEDULE_TIME_ZONE = "Europe/London";
 const MIN_SAMPLE = 30;
 const MIN_EV = 3;
 const MIN_PROB = 52;
@@ -130,11 +131,26 @@ function parseTime(value) {
   return h >= 0 && h < 24 && m >= 0 && m < 60 ? h * 60 + m : null;
 }
 
+function scheduleNowMinute() {
+  try {
+    const parts = new Intl.DateTimeFormat("en-GB", {
+      timeZone: SCHEDULE_TIME_ZONE,
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23"
+    }).formatToParts(new Date());
+    const h = Number(parts.find(part => part.type === "hour")?.value);
+    const m = Number(parts.find(part => part.type === "minute")?.value);
+    if (Number.isFinite(h) && Number.isFinite(m)) return h * 60 + m;
+  } catch (_error) {}
+  const nowDate = new Date();
+  return nowDate.getHours() * 60 + nowDate.getMinutes();
+}
+
 function resultAge(row) {
   const minute = parseTime(row.time);
   if (minute === null) return 99999 + Number(row.idx || 0) / 1000;
-  const nowDate = new Date();
-  const now = nowDate.getHours() * 60 + nowDate.getMinutes();
+  const now = scheduleNowMinute();
   let age = now - minute;
   if (age < 0) age += 1440;
   return age;
@@ -143,8 +159,7 @@ function resultAge(row) {
 function futureDistance(row) {
   const minute = parseTime(row.time);
   if (minute === null) return 99999 + Number(row.idx || 0) / 1000;
-  const nowDate = new Date();
-  const now = nowDate.getHours() * 60 + nowDate.getMinutes();
+  const now = scheduleNowMinute();
   let diff = minute - now;
   if (diff < -720) diff += 1440;
   if (diff < 0) diff += 1440;
@@ -154,8 +169,7 @@ function futureDistance(row) {
 function isFutureTime(value) {
   const minute = parseTime(value);
   if (minute === null) return true;
-  const nowDate = new Date();
-  const now = nowDate.getHours() * 60 + nowDate.getMinutes();
+  const now = scheduleNowMinute();
   let diff = minute - now;
   if (diff < -720) diff += 1440;
   return diff >= 0 && diff <= 720;
