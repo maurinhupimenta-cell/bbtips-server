@@ -149,6 +149,16 @@ function futureDistance(row) {
   return diff;
 }
 
+function isFutureTime(value) {
+  const minute = parseTime(value);
+  if (minute === null) return true;
+  const nowDate = new Date();
+  const now = nowDate.getHours() * 60 + nowDate.getMinutes();
+  let diff = minute - now;
+  if (diff < -720) diff += 1440;
+  return diff >= 0 && diff <= 720;
+}
+
 function scoreText(score) {
   return score ? `${score.a}-${score.b}` : "-";
 }
@@ -191,7 +201,13 @@ function uniqueRows(rows) {
   const seen = new Set();
   const out = [];
   for (const row of rows) {
-    const key = String(row.key || [row.liga ?? "", row.time ?? "", row.name ?? "", scoreText(row.score), row.future ? "f" : "r"].join("|"));
+    const key = [
+      row.platform || "",
+      row.liga ?? "",
+      row.time ?? "",
+      normalizeKey(row.name || ""),
+      scoreText(row.score) || (row.future ? "future" : "done")
+    ].join("|");
     if (seen.has(key)) continue;
     seen.add(key);
     out.push(row);
@@ -207,7 +223,7 @@ function historyRows(liga, market) {
 
 function upcomingRows(liga, market) {
   return uniqueRows(state.rows)
-    .filter(row => Number(row.liga) === Number(liga) && row.future && !row.score && (row.name || row.time))
+    .filter(row => Number(row.liga) === Number(liga) && row.future && !row.score && (row.name || row.time) && isFutureTime(row.time))
     .sort((a, b) => futureDistance(a) - futureDistance(b))
     .slice(0, 20);
 }

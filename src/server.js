@@ -115,6 +115,25 @@ function scannerTime(row, line) {
   return String(h || "");
 }
 
+function scannerNormalize(value) {
+  return String(value || "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]+/g, "");
+}
+
+function scannerCanonicalKey(row, liga, platform) {
+  const score = row.score ? `${row.score.a}-${row.score.b}` : row.future ? "future" : "done";
+  return [
+    String(platform || row.platform || "").toUpperCase(),
+    liga ?? row.liga ?? "",
+    row.time ?? "",
+    scannerNormalize(row.name || ""),
+    score
+  ].join("|");
+}
+
 function parseScannerOdds(raw) {
   if (!raw) return {};
   if (typeof raw === "object") return raw;
@@ -318,14 +337,7 @@ app.get("/api/scanner-data", requireUserOrAdmin, async (req, res) => {
   const seen = new Set();
   const out = [];
   for (const row of apiData.rows) {
-    const key = String(row.key || [
-      row.liga ?? "",
-      row.time ?? "",
-      row.name ?? "",
-      row.score ? `${row.score.a}-${row.score.b}` : "",
-      row.future ? "future" : "done",
-      row.idx ?? ""
-    ].join("|"));
+    const key = scannerCanonicalKey(row, row.liga, row.platform);
     if (seen.has(key)) continue;
     seen.add(key);
     out.push({ ...row, source: "api" });
@@ -345,17 +357,12 @@ app.get("/api/scanner-data", requireUserOrAdmin, async (req, res) => {
     const payloadLiga = Number(payload.liga) || majorityLiga;
     for (const row of payloadRows) {
       if (!row || typeof row !== "object") continue;
+      if (String(row.api || "") === "result-cache") continue;
       const rowPlatform = String(row.platform || payloadPlatform || "").toUpperCase();
       if (platform !== "TODAS" && rowPlatform && rowPlatform !== platform) continue;
-      const resolvedLiga = Number(row.liga) || payloadLiga || null;
-      const key = String(row.key || [
-        resolvedLiga ?? "",
-        row.time ?? "",
-        row.name ?? "",
-        row.score ? `${row.score.a}-${row.score.b}` : "",
-        row.future ? "future" : "done",
-        row.idx ?? ""
-      ].join("|"));
+      const resolvedLiga = Number(row.liga) || (!row.score && row.future ? payloadLiga : null);
+      if (!resolvedLiga) continue;
+      const key = scannerCanonicalKey(row, resolvedLiga, rowPlatform);
       if (seen.has(key)) continue;
       seen.add(key);
       out.push({

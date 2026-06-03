@@ -383,7 +383,7 @@ function rowsForTelemetry(seed=[]){
   });
   const out=[],seen=new Set();
   Object.values(groups).forEach(group=>{
-    const futures=group.filter(r=>r.future&&!r.score).sort((a,b)=>(parseTime(a.time)??9999)-(parseTime(b.time)??9999)).slice(0,50);
+    const futures=group.filter(r=>r.future&&!r.score&&(!r.time||isFuture(r.time))).sort((a,b)=>(parseTime(a.time)??9999)-(parseTime(b.time)??9999)).slice(0,50);
     const hist=group.filter(r=>r.score&&!r.future).slice(-540);
     [...futures,...hist].forEach(r=>{
       const row=compactTelemetryRow(r);
@@ -423,9 +423,12 @@ function sendAgenteLocal(rows){
 function sendResultadosAgenteLocal(){
   try{
     if(!Array.isArray(RESULTS_CACHE)||!RESULTS_CACHE.length)return;
-    const rows=RESULTS_CACHE.filter(r=>r&&r.score&&r.name).slice(-800).map(r=>({
+    const rows=RESULTS_CACHE.filter(r=>{
+      const liga=Number(r?.liga)||ligaFromUrl(r?.api||"");
+      return r&&r.score&&r.name&&liga;
+    }).slice(-800).map(r=>({
       key:["result-cache",r.time||"",r.name||"",`${r.score.a}-${r.score.b}`].join("|"),
-      liga:ligaFromUrl(r.api||"")||activeLiga()||null,
+      liga:Number(r.liga)||ligaFromUrl(r.api||"")||null,
       time:String(r.time||""),
       name:String(r.name||""),
       score:r.score,
@@ -433,6 +436,7 @@ function sendResultadosAgenteLocal(){
       future:false,
       api:"result-cache"
     }));
+    if(!rows.length)return;
     sendAgenteLocal(rows);
   }catch(e){}
 }
