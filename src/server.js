@@ -130,31 +130,6 @@ function scannerTime(row, line) {
   return String(h || "");
 }
 
-function scannerParseTime(value) {
-  const match = String(value || "").trim().match(/^(\d{1,2})[.:](\d{2})$/);
-  if (!match) return null;
-  const h = Number(match[1]);
-  const m = Number(match[2]);
-  return h >= 0 && h < 24 && m >= 0 && m < 60 ? h * 60 + m : null;
-}
-
-function scannerScheduleDistance(value, anchor) {
-  const minute = scannerParseTime(value);
-  if (minute === null) return 99999;
-  if (anchor === null || anchor === undefined) return minute;
-  let diff = minute - anchor;
-  if (diff < 0) diff += 1440;
-  return diff;
-}
-
-function scannerIsScheduleFuture(value, anchor) {
-  const minute = scannerParseTime(value);
-  if (minute === null) return true;
-  if (anchor === null || anchor === undefined) return false;
-  const diff = scannerScheduleDistance(value, anchor);
-  return diff >= 0 && diff <= 720;
-}
-
 function scannerNormalize(value) {
   return String(value || "")
     .toLowerCase()
@@ -378,10 +353,9 @@ app.get("/api/scanner-data", requireUserOrAdmin, async (req, res) => {
     `, [limit]);
     telemetryScope = telemetry.rows.length ? "ultima_coleta" : "vazio";
   }
-  const latestTelemetryPlatform = telemetry.rows
-    .map(item => String(item.payload?.platform || "").toUpperCase())
-    .find(value => value && value !== "TODAS") || "BET365";
-  const apiPlatform = platform === "TODAS" ? latestTelemetryPlatform : platform;
+  const apiData = platform === "TODAS"
+    ? { at: Date.now(), rows: [], errors: [], platform, hours: requestedHours || "Horas3" }
+    : null;
 
   const recentHours = requestedHours || telemetry.rows
     .map(item => normalizeScannerHours(item.payload?.hours))
@@ -391,9 +365,8 @@ app.get("/api/scanner-data", requireUserOrAdmin, async (req, res) => {
     .find(Boolean) || "Horas3";
 
   const activeHours = recentHours;
-  const finalApiData = await fetchScannerApiRows(apiPlatform, activeHours);
+  const finalApiData = apiData || await fetchScannerApiRows(platform, activeHours);
   const latestFutureMsByLiga = new Map();
-  let futureAnchor = null;
   for (const item of telemetry.rows) {
     const payload = item.payload || {};
     const payloadRows = Array.isArray(payload.rows) ? payload.rows : [];
@@ -424,10 +397,6 @@ app.get("/api/scanner-data", requireUserOrAdmin, async (req, res) => {
       const resolvedLiga = Number(row.liga) || payloadLiga;
       if (!resolvedLiga || latestFutureMsByLiga.has(resolvedLiga)) continue;
       latestFutureMsByLiga.set(resolvedLiga, new Date(item.created_at).getTime());
-      if (futureAnchor === null) {
-        const minute = scannerParseTime(row.time);
-        if (minute !== null) futureAnchor = minute;
-      }
     }
   }
 
@@ -436,7 +405,7 @@ app.get("/api/scanner-data", requireUserOrAdmin, async (req, res) => {
   for (const row of finalApiData.rows) {
     const rowHours = normalizeScannerHours(row.hours) || activeHours;
     if (rowHours !== activeHours) continue;
-    if (row.future && !row.score && !scannerIsScheduleFuture(row.time, futureAnchor)) continue;
+    if (row.future && !row.score) continue;
     const key = scannerCanonicalKey(row, row.liga, row.platform);
     if (seen.has(key)) continue;
     seen.add(key);
