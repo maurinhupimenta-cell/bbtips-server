@@ -13,7 +13,7 @@ clearInterval(window[TIMER]);
 ["BBTIPS_FINAL_ROBO_TIMER","BBTIPS_API_ALERTAS_TIMER","BBTIPS_INTERCEPTA_API_TIMER","BBTIPS_PRO_TRADER_TIMER","HB_MULTI_TIMER"].forEach(k=>{try{clearInterval(window[k])}catch(e){}});
 ["bbtips-api-alertas","bbtips-intercepta-api","hb-multi","hb-tips-scanner"].forEach(id=>document.getElementById(id)?.remove());
 
-const CONFIG={market:"over25",tol:0.8,minEV:0,minProb:52,minOddPct:45,minOddSample:8,maxProximos:6,intervalMs:25000,windows:[120,240,480,960],ligas:[1,2,3,4,5,6],ligaAuto:true,horas:"Horas3",filtros:"o15,o25,u25,ambs,ambn,o35,u15,u35,ge5,tgv5,tgc5,ftc,fte,ftv"};
+const CONFIG={market:"over25",tol:0.8,minEV:3,minProb:52,minOddPct:45,minOddSample:30,minTeamSample:30,maxProximos:6,intervalMs:25000,windows:[120,240,480,960],ligas:[1,2,3,4,5,6],ligaAuto:true,horas:"Horas3",filtros:"o15,o25,u25,ambs,ambn,o35,u15,u35,ge5,tgv5,tgc5,ftc,fte,ftv"};
 let PANEL_HOVER=false;
 let TOOLTIP_SERIES=[];
 let RESULTS_CACHE=[];
@@ -910,7 +910,7 @@ function teamPayPct(game,m){
     const t=r.txt.toLowerCase();
     return names.some(n=>n&&t.includes(n));
   });
-  if(rows.length<3)return null;
+  if(rows.length<CONFIG.minTeamSample)return null;
   const g=rows.filter(r=>paysMarket(r.score,m)).length;
   return {g,j:rows.length,p:g/rows.length*100};
 }
@@ -925,7 +925,7 @@ function oddPayPct(game,m){
     }
     return hit;
   }));
-  if(rows.length<3)return null;
+  if(rows.length<CONFIG.minOddSample)return null;
   const g=rows.filter(r=>paysMarket(r.score,m)).length;
   return {g,j:rows.length,p:g/rows.length*100};
 }
@@ -1170,9 +1170,11 @@ function statusStatsBox(){
 }
 function weightedProb(graphP,team,odd){
   const parts=[];
-  if(Number.isFinite(graphP))parts.push({v:graphP,w:5});
-  if(team&&Number.isFinite(team.p))parts.push({v:team.p,w:3});
-  if(odd&&Number.isFinite(odd.p))parts.push({v:odd.p,w:2});
+  const hasSpecific=(team&&Number.isFinite(team.p))||(odd&&Number.isFinite(odd.p));
+  if(!hasSpecific)return null;
+  if(Number.isFinite(graphP))parts.push({v:graphP,w:2});
+  if(team&&Number.isFinite(team.p))parts.push({v:team.p,w:5});
+  if(odd&&Number.isFinite(odd.p))parts.push({v:odd.p,w:5});
   if(!parts.length)return null;
   const sw=parts.reduce((a,b)=>a+b.w,0);
   return parts.reduce((a,b)=>a+b.v*b.w,0)/sw;
@@ -1195,26 +1197,30 @@ function analysisForGame(g,series){
   const graphP=best?.ready?best.p:null;
   const prob=weightedProb(graphP,team,odd);
   const fairOdd=prob?100/prob:null;
-  const ev=prob===null?null:(prob-CONFIG.minProb);
+  const breakEven=Number.isFinite(g.odd)?100/g.odd:null;
+  const probEdge=prob===null||breakEven===null?null:(prob-breakEven);
+  const ev=prob===null||!Number.isFinite(g.odd)?null:(prob/100*g.odd-1)*100;
   const p=prob===null?null:prob/100;
   const evGale=p===null?null:(p*(g.odd-1)+(1-p)*(p*(g.odd-2)+(1-p)*(-2)))*100;
+  const probOk=probEdge!==null&&probEdge>=3&&prob>=CONFIG.minProb;
+  const evOk=ev!==null&&ev>=CONFIG.minEV;
   let score=0;
   if(best?.fundo)score+=35;
-  if(ev!==null&&ev>0)score+=20;
+  if(evOk)score+=20;
   if(evGale!==null&&evGale>0)score+=20;
   if(team)score+=Math.max(0,Math.min(20,(team.p-50)/2));
   if(odd)score+=Math.max(0,Math.min(20,(odd.p-50)/2));
   if(minHits.some(r=>r.w>=480))score+=10;
   const strongBase=(team&&team.p>=50)||(odd&&odd.p>=50)||(!team&&!odd&&prob!==null);
   const coldOdd=odd&&odd.j>=CONFIG.minOddSample&&odd.p<CONFIG.minOddPct;
-  const valueOk=fairOdd!==null&&g.odd>=fairOdd;
-  if(evGale!==null&&evGale>=CONFIG.minEV&&prob!==null&&prob>=CONFIG.minProb&&!coldOdd)score=Math.max(score,70);
-  if(score<45&&prob!==null&&prob>=45&&!coldOdd)score=45;
-  if(score<45&&evGale!==null&&evGale>-15&&!coldOdd)score=45;
+  const valueOk=evOk&&probOk;
+  if(evGale!==null&&evGale>=CONFIG.minEV&&valueOk&&!coldOdd)score=Math.max(score,70);
+  if(score<45&&valueOk&&!coldOdd)score=45;
+  if(!valueOk)score=Math.min(score,44);
   if(coldOdd)score=Math.min(score,44);
   const status=score>=70?"ENTRAR":score>=45?"OBSERVAR":"PASSAR";
-  const motivo=coldOdd?"ODD FRIA":status;
-  return {reads,best,bestEv,team,odd,prob,fairOdd,ev,evGale,score:Math.round(score),status,motivo,coldOdd,valueOk};
+  const motivo=coldOdd?"ODD FRIA":prob===null?"SEM BASE":!evOk?"EV NEGATIVO":!probOk?"EDGE BAIXO":status;
+  return {reads,best,bestEv,team,odd,prob,fairOdd,breakEven,probEdge,ev,evGale,score:Math.round(score),status,motivo,coldOdd,valueOk};
 }
 function analyze(){
   const games=readGridGames();
@@ -1223,7 +1229,7 @@ function analyze(){
   games.forEach(g=>{
     g.analysis=analysisForGame(g,series);
     const hits=g.analysis.reads.filter(r=>r.ready&&r.fundo&&(r.fundo30||r.fundoMin)&&Number.isFinite(r.ev));
-    const podeSinal=g.analysis.prob!==null&&g.analysis.prob>=CONFIG.minProb&&g.analysis.evGale!==null&&g.analysis.evGale>=CONFIG.minEV&&!g.analysis.coldOdd;
+    const podeSinal=g.analysis.valueOk&&g.analysis.evGale!==null&&g.analysis.evGale>=CONFIG.minEV&&!g.analysis.coldOdd;
     if(hits.length&&podeSinal){
       signals.push({game:g,hits,best:hits.sort((a,b)=>b.w-a.w||b.ev-a.ev)[0]});
     }
@@ -1238,7 +1244,7 @@ function notify(signals){
     if(seen.has(k))return;
     seen.add(k);beep();
     const tipo=s.tipo||"FUNDO";
-    const msg=`${ligaNome()} | ${tipo} ${s.best.w} | ${s.game.market.name} @${s.game.odd} | ${s.game.time} ${s.game.name} | EV ${Number.isFinite(s.best.ev)?s.best.ev.toFixed(1):"-"}%`;
+    const msg=`${ligaNome()} | ${tipo} ${s.best.w} | ${s.game.market.name} @${s.game.odd} | ${s.game.time} ${s.game.name} | EV linha ${Number.isFinite(s.best.ev)?s.best.ev.toFixed(1):"-"}%`;
     if("Notification" in window&&Notification.permission==="granted")new Notification("BBTips sinal",{body:msg});
     else if("Notification" in window&&Notification.permission!=="denied")Notification.requestPermission();
   });
@@ -1304,12 +1310,13 @@ function gamesTable(games,series){
     const reads=an.reads.map(r=>{
       const cls=(r.fundo30||r.fundoMin)?"ok":r.ready?"warn":"bad";
       const tag=r.fundo30?" <30":r.fundoMin?" MINIMA":"";
-      return `<span class="${cls}">${r.w}: ${r.ready?`${r.g}/${r.j} ${r.p.toFixed(1)}% min ${r.min.toFixed(1)}${tag} EV ${Number.isFinite(r.ev)?r.ev.toFixed(1):"-"}`:`parcial ${r.g}/${r.j} de ${r.w}`}</span>`;
+      return `<span class="${cls}">${r.w}: ${r.ready?`${r.g}/${r.j} ${r.p.toFixed(1)}% min ${r.min.toFixed(1)}${tag} EV linha ${Number.isFinite(r.ev)?r.ev.toFixed(1):"-"}`:`parcial ${r.g}/${r.j} de ${r.w}`}</span>`;
     }).join("<br>");
     const cls=an.status==="ENTRAR"?"ok":an.status==="OBSERVAR"?"warn":"bad";
     const prob=an.prob===null?"-":`${an.prob.toFixed(1)}%`;
     const fair=an.fairOdd===null?"-":an.fairOdd.toFixed(2);
     const ev=an.ev===null?"-":`${an.ev.toFixed(1)}%`;
+    const edge=an.probEdge===null?"-":`${an.probEdge.toFixed(1)}%`;
     const evG=an.evGale===null?"-":`${an.evGale.toFixed(1)}%`;
     const team=an.team?`${an.team.g}/${an.team.j} ${an.team.p.toFixed(1)}%`:"sem base";
     const odd=an.odd?`${an.odd.g}/${an.odd.j} ${an.odd.p.toFixed(1)}%${an.coldOdd?" ODD FRIA":""}`:"sem base";
@@ -1318,7 +1325,7 @@ function gamesTable(games,series){
     const horario=hourStatsText(hourStatsForGame(g,g.market));
     const liga=ligaStatsText(g.market);
     const detalhe=teamDetailText(g,g.market);
-    return `<tr><td>${esc(g.time)}</td><td>${esc(g.name)}</td><td>${esc(g.market.name)}</td><td>${g.odd.toFixed(2)}</td><td class="${cls}">${esc(an.motivo)}<br>Score ${an.score}</td><td>Prob real ${prob}<br>Odd justa ${fair}<br>EV ${ev}<br>EV gale ${evG}<br>${ciclo}<br>${oddFixa}<br>${horario}<br>${liga}</td><td>Times geral: ${team}<br>${oneXTwoOddsText(g)}<br>${detalhe}<br>Odd atual @${g.odd.toFixed(2)} ${odd}</td><td>${reads}</td></tr>`;
+    return `<tr><td>${esc(g.time)}</td><td>${esc(g.name)}</td><td>${esc(g.market.name)}</td><td>${g.odd.toFixed(2)}</td><td class="${cls}">${esc(an.motivo)}<br>Score ${an.score}</td><td>Prob calibrada ${prob}<br>Odd justa ${fair}<br>Edge odd ${edge}<br>EV real ${ev}<br>EV gale ${evG}<br>${ciclo}<br>${oddFixa}<br>${horario}<br>${liga}</td><td>Times geral: ${team}<br>${oneXTwoOddsText(g)}<br>${detalhe}<br>Odd atual @${g.odd.toFixed(2)} ${odd}</td><td>${reads}</td></tr>`;
   }).join("")}</table>`;
 }
 function signalsBox(signals){
@@ -1327,7 +1334,7 @@ function signalsBox(signals){
   if(!signals.length&&!fundoHtml)return "<p class='warn'>Sem sinal agora. O som toca quando a linha calculada do mercado bater fundo/minima em 120, 240, 480 ou 960.</p>";
   return signals.map(s=>{
     const tipo=s.tipo||"FUNDO";
-    return `<div class="sig"><b class="ok">${tipo} ${s.best.w}</b> ${esc(s.game.market.name)} @${s.game.odd.toFixed(2)} | ${esc(s.game.time)} ${esc(s.game.name)} | atual ${Number.isFinite(s.best.cur)?s.best.cur.toFixed(1):"-"} min ${Number.isFinite(s.best.min)?s.best.min.toFixed(1):"-"} EV ${Number.isFinite(s.best.ev)?s.best.ev.toFixed(1):"-"}%</div>`;
+    return `<div class="sig"><b class="ok">${tipo} ${s.best.w}</b> ${esc(s.game.market.name)} @${s.game.odd.toFixed(2)} | ${esc(s.game.time)} ${esc(s.game.name)} | atual ${Number.isFinite(s.best.cur)?s.best.cur.toFixed(1):"-"} min ${Number.isFinite(s.best.min)?s.best.min.toFixed(1):"-"} EV linha ${Number.isFinite(s.best.ev)?s.best.ev.toFixed(1):"-"}%</div>`;
   }).join("")+fundoHtml;
 }
 function trendBox(series){
@@ -1429,7 +1436,7 @@ function draw(){
   const ligaAtual=activeLiga();
   const opts=MARKETS.map(m=>`<option value="${m.key}" ${m.key===CONFIG.market?"selected":""}>${m.name}</option>`).join("");
   P.innerHTML=`<div class="top"><b>BBTips Robo | ${new Date().toLocaleTimeString()} | Liga ${ligaAtual||"auto"} | Mercado ${esc(market().name)} | API ${API_ROWS.length} | Resultados ${RESULTS_CACHE.length} | Proximos ${a.games.length} | Sinais ${a.signals.length}${fundoTxt}</b>
-  <span>Mercado <select id="rb-market">${opts}</select> EV+ <input id="rb-ev" value="${CONFIG.minEV}"> Prob <input id="rb-prob" value="${CONFIG.minProb}"> OddFria% <input id="rb-cold" value="${CONFIG.minOddPct}"> Prox <input id="rb-maxprox" value="${CONFIG.maxProximos}"> Tol <input id="rb-tol" value="${CONFIG.tol}">
+  <span>Mercado <select id="rb-market">${opts}</select> EV real+ <input id="rb-ev" value="${CONFIG.minEV}"> Prob <input id="rb-prob" value="${CONFIG.minProb}"> OddFria% <input id="rb-cold" value="${CONFIG.minOddPct}"> Prox <input id="rb-maxprox" value="${CONFIG.maxProximos}"> Tol <input id="rb-tol" value="${CONFIG.tol}">
   <button id="rb-api">API</button><button id="rb-hist">Historico</button><button id="rb-scan">Atualizar</button><button id="rb-som">Som</button><button id="rb-min">Minimizar</button><button id="rb-close">Fechar</button></span></div>
   <div class="body">
     <h3>Proximos jogos</h3>${trendUpBox()}${marketRankingBox()}${gamesTable(a.games,a.series)}
@@ -1480,6 +1487,7 @@ window.BBTipsRobo={analyze,config:CONFIG,exportar:exportHistory,historico:loadSt
   const RIGHT_FOCUS_RATIO = 0.34;
   const LOOP_MS = 2600;
   const SLOW_SCAN_MS = 6500;
+  const MIN_VISUAL_SIMILARS = 20;
   const SCORE_RE = /(?:^|[^\d])(\d{1,2})\s*[-xX]\s*(\d{1,2})(?=$|[^\d])/g;
   let panel;
   let canvas;
@@ -2363,7 +2371,7 @@ window.BBTipsRobo={analyze,config:CONFIG,exportar:exportHistory,historico:loadSt
       .slice(0, 18)
       .map((x) => x.item);
 
-    if (similar.length < 4) {
+    if (similar.length < MIN_VISUAL_SIMILARS) {
       return { status: "similares " + similar.length + " de " + history.length, over: "--", over35: "--", btts: "--", sinal: "SEM PADRAO FORTE", color: "#ffd54a" };
     }
 
@@ -2606,13 +2614,13 @@ window.BBTipsRobo={analyze,config:CONFIG,exportar:exportHistory,historico:loadSt
     }
 
     if (payScore >= 82) {
-      sinal = "PAGAR AGORA";
+      sinal = "PROTEGER AGORA";
       color = "#ffd54a";
       acao = "Pagar/proteger";
       pagamento = "Muito bom";
       nota = "Leitura forte de pagamento: preco em zona alta/topo, impulso perdendo forca e histograma deixando de confirmar continuidade.";
     } else if (payScore >= 68) {
-      sinal = "PAGAR PARCIAL";
+      sinal = "PROTEGER PARCIAL";
       color = "#ffd54a";
       acao = "Parcial";
       pagamento = "Bom";
@@ -2622,7 +2630,7 @@ window.BBTipsRobo={analyze,config:CONFIG,exportar:exportHistory,historico:loadSt
     }
 
     if (pontaCaindo) {
-      sinal = payScore >= 68 ? "PAGAR PARCIAL" : score > 0.18 ? "ALTA EM RECUO" : "BAIXA";
+      sinal = payScore >= 68 ? "PROTEGER PARCIAL" : score > 0.18 ? "ALTA EM RECUO" : "BAIXA";
       color = payScore >= 68 || score > 0.18 ? "#ffd54a" : "#ff4d5f";
       acao = payScore >= 68 ? "Proteger" : "Aguardar";
       nota = "A tendencia maior pode ser de alta, mas a pontinha direita esta descendo. Entao o movimento atual nao e subida; e recuo.";
