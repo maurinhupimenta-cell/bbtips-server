@@ -286,9 +286,72 @@ function compactTelemetryRow(r){
     idx:Number(r.idx||0)
   };
 }
+function oddsObjectFromText(txt){
+  const odds={};
+  MARKETS.forEach(m=>{
+    const value=oddsForMarket(txt,m)[0];
+    if(!value)return;
+    odds[m.key]=Math.round(value*100)/100;
+    const alias=marketAliases(m)[0];
+    if(alias)odds[alias]=Math.round(value*100)/100;
+  });
+  return odds;
+}
+function readGridRowsForTelemetry(){
+  const out=[],seen=new Set(),upcoming=upcomingSetFromPage();
+  const liga=activeLiga();
+  const platform=currentPlatform();
+  document.querySelectorAll("table").forEach(table=>{
+    const rows=[...table.querySelectorAll("tr")];
+    const minuteByCol={};
+    rows.forEach(tr=>{
+      const cells=[...tr.children];
+      const first=esc(cells[0]?.innerText||"").toLowerCase();
+      if(first==="h"||first==="horario"||first==="hora"){
+        cells.forEach((c,i)=>{
+          const n=Number(esc(c.innerText));
+          if(Number.isInteger(n)&&n>=0&&n<60)minuteByCol[i]=n;
+        });
+      }
+    });
+    rows.forEach(tr=>{
+      const cells=[...tr.children];
+      const hour=Number(esc(cells[0]?.innerText||""));
+      if(!Number.isInteger(hour)||hour<0||hour>23)return;
+      cells.forEach((cell,i)=>{
+        if(i===0||minuteByCol[i]===undefined)return;
+        const txt=cell.innerText||"";
+        if(!/\s+x\s+/i.test(txt)||hasResult(txt))return;
+        const time=`${hour}.${String(minuteByCol[i]).padStart(2,"0")}`;
+        if(upcoming.size&&!upcoming.has(time))return;
+        if(!isFuture(time))return;
+        const name=gameName(txt);
+        const odds=oddsObjectFromText(txt);
+        if(!Object.keys(odds).length)return;
+        const key=["dom-grid",platform,liga||"auto",time,name].join("|");
+        if(seen.has(key))return;
+        seen.add(key);
+        out.push({
+          key,
+          liga,
+          time,
+          name,
+          score:null,
+          odds,
+          future:true,
+          platform,
+          api:"dom-grid",
+          idx:i,
+          txt:String(txt).slice(0,500)
+        });
+      });
+    });
+  });
+  return out.sort((a,b)=>(parseTime(a.time)??9999)-(parseTime(b.time)??9999)).slice(0,160);
+}
 function rowsForTelemetry(seed=[]){
   const by={};
-  [...API_ROWS,...seed].forEach(r=>{if(r&&typeof r==="object")by[r.key||JSON.stringify([r.liga,r.time,r.name,r.idx])]=r});
+  [...API_ROWS,...seed,...readGridRowsForTelemetry()].forEach(r=>{if(r&&typeof r==="object")by[r.key||JSON.stringify([r.liga,r.time,r.name,r.idx])]=r});
   const groups={};
   Object.values(by).forEach(r=>{
     const liga=r.liga??ligaFromUrl(r.api||"")??"auto";
@@ -1521,6 +1584,7 @@ function draw(){
   loadApiRowsLight();
   refreshResultsCacheLight(isMin?false:false);
   sendResultadosAgenteLocal();
+  sendAgenteLocal(rowsForTelemetry());
   if(isMin){
     const ligaAtual=activeLiga();
     P.innerHTML=`<div class="top"><b>BBTips Robo | ${new Date().toLocaleTimeString()} | Liga ${ligaAtual||"auto"} | Mercado ${esc(market().name)} | API ${API_ROWS.length} | Resultados ${RESULTS_CACHE.length} | modo leve</b>
