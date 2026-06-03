@@ -120,6 +120,33 @@ function isFuture(v){
   if(diff<-720)diff+=1440;
   return diff>=0&&diff<=720;
 }
+function scheduleAnchorFromRows(rows=[]){
+  for(const r of rows){
+    if(typeof r!=="string"&&(r?.score||!r?.future))continue;
+    const hm=parseTime(typeof r==="string"?r:r?.time);
+    if(hm!==null)return hm;
+  }
+  for(const r of rows){
+    const hm=parseTime(typeof r==="string"?r:r?.time);
+    if(hm!==null)return hm;
+  }
+  return null;
+}
+function scheduleDistance(v,anchor){
+  const hm=parseTime(v);
+  if(hm===null)return 99999;
+  if(anchor===null||anchor===undefined)return hm;
+  let diff=hm-anchor;
+  if(diff<0)diff+=1440;
+  return diff;
+}
+function isScheduleFuture(v,anchor){
+  const hm=parseTime(v);
+  if(hm===null)return true;
+  if(anchor===null||anchor===undefined)return isFuture(v);
+  const diff=scheduleDistance(v,anchor);
+  return diff>=0&&diff<=720;
+}
 function oddsForMarket(txt,m){
   const out=[];
   m.patterns.forEach(re=>{
@@ -331,8 +358,10 @@ function oddsObjectFromText(txt){
   });
   return odds;
 }
-function readGridRowsForTelemetry(){
-  const out=[],seen=new Set(),upcoming=upcomingSetFromPage();
+function readGridRowsForTelemetry(anchor=null){
+  const upcoming=upcomingSetFromPage();
+  const futureAnchor=anchor??scheduleAnchorFromRows([...upcoming]);
+  const out=[],seen=new Set();
   const liga=activeLiga();
   const platform=currentPlatform();
   const hours=currentHours();
@@ -349,8 +378,7 @@ function readGridRowsForTelemetry(){
         const txt=cell.innerText||"";
         if(!/\s+x\s+/i.test(txt)||hasResult(txt))return;
         const time=`${hour}.${String(minuteByCol[i]).padStart(2,"0")}`;
-        if(upcoming.size&&!upcoming.has(time))return;
-        if(!isFuture(time))return;
+        if(!isScheduleFuture(time,futureAnchor))return;
         const name=gameName(txt);
         const odds=oddsObjectFromText(txt);
         if(!Object.keys(odds).length)return;
@@ -374,7 +402,7 @@ function readGridRowsForTelemetry(){
       });
     });
   });
-  return out.sort((a,b)=>(parseTime(a.time)??9999)-(parseTime(b.time)??9999)).slice(0,160);
+  return out.sort((a,b)=>scheduleDistance(a.time,futureAnchor)-scheduleDistance(b.time,futureAnchor)).slice(0,160);
 }
 function gameRowsForTelemetry(games=[]){
   const liga=activeLiga();
@@ -396,19 +424,22 @@ function gameRowsForTelemetry(games=[]){
       future:true,
       platform,
       hours,
-      api:g.api?"api-game":"robot-game",
+      api:"robot-game",
       idx:i,
       txt:String(g.text||"").slice(0,500)
     };
   });
 }
 function isVisibleFutureRow(r){
-  return r&&r.future&&!r.score&&(r.api==="dom-grid"||r.api==="robot-game");
+  if(!r||!r.future||r.score)return false;
+  const api=String(r.api||"");
+  return api==="dom-grid"||api==="robot-game"||/futebolvirtual/i.test(api);
 }
 function rowsForTelemetry(seed=[]){
   const by={};
   const hours=currentHours();
-  [...API_ROWS,...seed,...readGridRowsForTelemetry()].forEach(r=>{
+  const futureAnchor=scheduleAnchorFromRows([...upcomingSetFromPage()])??scheduleAnchorFromRows(seed);
+  [...API_ROWS,...seed,...readGridRowsForTelemetry(futureAnchor)].forEach(r=>{
     if(!r||typeof r!=="object")return;
     const rowHours=String(r.hours||hoursFromUrl(r.api||"")||hours);
     if(rowHours!==hours)return;
@@ -421,7 +452,7 @@ function rowsForTelemetry(seed=[]){
   });
   const out=[],seen=new Set();
   Object.values(groups).forEach(group=>{
-    const futures=group.filter(r=>isVisibleFutureRow(r)&&(!r.time||isFuture(r.time))).sort((a,b)=>(parseTime(a.time)??9999)-(parseTime(b.time)??9999)).slice(0,6);
+    const futures=group.filter(r=>isVisibleFutureRow(r)&&(!r.time||isScheduleFuture(r.time,futureAnchor))).sort((a,b)=>scheduleDistance(a.time,futureAnchor)-scheduleDistance(b.time,futureAnchor)).slice(0,6);
     const hist=group.filter(r=>r.score&&!r.future).slice(-540);
     [...futures,...hist].forEach(r=>{
       const row=compactTelemetryRow(r);
@@ -617,8 +648,15 @@ function hoursFromUrl(url){
 }
 function currentHours(){
   const read=text=>{
-    const hit=String(text||"").match(/\b(\d+)\s*horas?\b/i)||String(text||"").match(/\bHoras\s*(\d+)\b/i);
-    return hit?`Horas${hit[1]}`:null;
+    const raw=String(text||"");
+    for(const re of [/\b(\d+)\s*horas?\b/ig,/\bHoras\s*(\d+)\b/ig]){
+      let hit;
+      while((hit=re.exec(raw))){
+        const n=Number(hit[1]);
+        if(n===3||n===5)return `Horas${n}`;
+      }
+    }
+    return null;
   };
   try{
     let selected="";
@@ -642,7 +680,7 @@ function currentHours(){
     const fromActive=read(active);
     if(fromActive)return fromActive;
   }catch(e){}
-  return CONFIG.horas||"Horas3";
+  return read(CONFIG.horas)||"Horas3";
 }
 function apiUrl(liga,futuro){
   return `https://api.thtips.com.br/api/futebolvirtual?liga=${liga}&futuro=${futuro?"true":"false"}&Horas=${currentHours()}&tipoOdd=&dadosAlteracao=&filtros=${encodeURIComponent(CONFIG.filtros)}&confrontos=false&hrsConfrontos=240&plataforma=${encodeURIComponent(currentPlatform())}`;

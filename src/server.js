@@ -87,7 +87,7 @@ function normalizeScannerHours(value) {
   const match = String(value || "").match(/(?:Horas)?\s*(\d+)/i);
   if (!match) return null;
   const n = Number(match[1]);
-  return Number.isFinite(n) && n > 0 ? `Horas${n}` : null;
+  return n === 3 || n === 5 ? `Horas${n}` : null;
 }
 
 function scannerHoursFromUrl(url) {
@@ -151,7 +151,7 @@ function scannerCanonicalKey(row, liga, platform) {
 
 function scannerVisibleFutureSource(row) {
   const api = String(row?.api || "");
-  return api === "dom-grid" || api === "robot-game";
+  return api === "dom-grid" || api === "robot-game" || /futebolvirtual/i.test(api);
 }
 
 function parseScannerOdds(raw) {
@@ -366,25 +366,37 @@ app.get("/api/scanner-data", requireUserOrAdmin, async (req, res) => {
 
   const activeHours = recentHours;
   const finalApiData = apiData || await fetchScannerApiRows(platform, activeHours);
-  let latestFutureAt = null;
+  const latestFutureMsByLiga = new Map();
   for (const item of telemetry.rows) {
     const payload = item.payload || {};
     const payloadRows = Array.isArray(payload.rows) ? payload.rows : [];
     const payloadPlatform = String(payload.platform || "").toUpperCase();
+    const rawPayloadHours = payload.hours === undefined || payload.hours === null ? "" : String(payload.hours);
     const payloadHours = normalizeScannerHours(payload.hours) || null;
+    if (rawPayloadHours && !payloadHours) continue;
     if (payloadHours && payloadHours !== activeHours) continue;
-    const hasMatchingFuture = payloadRows.some(row => {
-      if (!row || typeof row !== "object" || row.score || !row.future) return false;
-      if (!scannerVisibleFutureSource(row)) return false;
+    const ligaCounts = new Map();
+    for (const payloadRow of payloadRows) {
+      const ligaValue = Number(payloadRow?.liga);
+      if (Number.isFinite(ligaValue) && ligaValue > 0) {
+        ligaCounts.set(ligaValue, (ligaCounts.get(ligaValue) || 0) + 1);
+      }
+    }
+    const majorityLiga = [...ligaCounts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] || null;
+    const payloadLiga = Number(payload.liga) || majorityLiga;
+    for (const row of payloadRows) {
+      if (!row || typeof row !== "object" || row.score || !row.future) continue;
+      if (!scannerVisibleFutureSource(row)) continue;
       const rowPlatform = String(row.platform || payloadPlatform || "").toUpperCase();
+      const rawRowHoursValue = row.hours === undefined || row.hours === null ? "" : String(row.hours);
       const rawRowHours = normalizeScannerHours(row.hours);
+      if (rawRowHoursValue && !rawRowHours) continue;
       const rowHours = rawRowHours || payloadHours || (requestedHours ? null : activeHours);
-      if (platform !== "TODAS" && rowPlatform && rowPlatform !== platform) return false;
-      return rowHours === activeHours;
-    });
-    if (hasMatchingFuture) {
-      latestFutureAt = item.created_at;
-      break;
+      if (platform !== "TODAS" && rowPlatform && rowPlatform !== platform) continue;
+      if (rowHours !== activeHours) continue;
+      const resolvedLiga = Number(row.liga) || payloadLiga;
+      if (!resolvedLiga || latestFutureMsByLiga.has(resolvedLiga)) continue;
+      latestFutureMsByLiga.set(resolvedLiga, new Date(item.created_at).getTime());
     }
   }
 
@@ -393,6 +405,7 @@ app.get("/api/scanner-data", requireUserOrAdmin, async (req, res) => {
   for (const row of finalApiData.rows) {
     const rowHours = normalizeScannerHours(row.hours) || activeHours;
     if (rowHours !== activeHours) continue;
+    if (row.future && !row.score) continue;
     const key = scannerCanonicalKey(row, row.liga, row.platform);
     if (seen.has(key)) continue;
     seen.add(key);
@@ -402,7 +415,9 @@ app.get("/api/scanner-data", requireUserOrAdmin, async (req, res) => {
     const payload = item.payload || {};
     const payloadRows = Array.isArray(payload.rows) ? payload.rows : [];
     const payloadPlatform = String(payload.platform || "").toUpperCase();
+    const rawPayloadHours = payload.hours === undefined || payload.hours === null ? "" : String(payload.hours);
     const payloadHours = normalizeScannerHours(payload.hours) || null;
+    if (rawPayloadHours && !payloadHours) continue;
     if (payloadHours && payloadHours !== activeHours) continue;
     const ligaCounts = new Map();
     for (const payloadRow of payloadRows) {
@@ -418,13 +433,18 @@ app.get("/api/scanner-data", requireUserOrAdmin, async (req, res) => {
       if (String(row.api || "") === "result-cache") continue;
       const rowPlatform = String(row.platform || payloadPlatform || "").toUpperCase();
       if (platform !== "TODAS" && rowPlatform && rowPlatform !== platform) continue;
+      const rawRowHoursValue = row.hours === undefined || row.hours === null ? "" : String(row.hours);
       const rawRowHours = normalizeScannerHours(row.hours);
+      if (rawRowHoursValue && !rawRowHours) continue;
       const rowHours = rawRowHours || payloadHours || (requestedHours ? null : activeHours);
       if (!rowHours || rowHours !== activeHours) continue;
-      if (row.future && !row.score && !scannerVisibleFutureSource(row)) continue;
-      if (row.future && !row.score && latestFutureAt && item.created_at !== latestFutureAt) continue;
       const resolvedLiga = Number(row.liga) || (!row.score && row.future ? payloadLiga : null);
       if (!resolvedLiga) continue;
+      if (row.future && !row.score) {
+        if (!scannerVisibleFutureSource(row)) continue;
+        const latestFutureMs = latestFutureMsByLiga.get(resolvedLiga);
+        if (!latestFutureMs || new Date(item.created_at).getTime() !== latestFutureMs) continue;
+      }
       const key = scannerCanonicalKey(row, resolvedLiga, rowPlatform);
       if (seen.has(key)) continue;
       seen.add(key);

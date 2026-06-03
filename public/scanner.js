@@ -370,13 +370,12 @@ function render() {
 
   els.leagues.querySelectorAll(".league").forEach(card => {
     card.addEventListener("click", () => {
-      state.selectedLiga = Number(card.dataset.liga);
+      state.selectedLiga = null;
       render();
     });
   });
 
   const games = summaries
-    .filter(item => !state.selectedLiga || item.liga === state.selectedLiga)
     .flatMap(item => item.upcoming.map(game => ({ ...game, liga: item.liga, ligaName: item.name, history: item.history })))
     .sort((a, b) => {
       const la = LIGAS.findIndex(([liga]) => Number(liga) === Number(a.liga));
