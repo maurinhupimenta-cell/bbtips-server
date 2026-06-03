@@ -1,12 +1,56 @@
 const SCRIPT_ID = "bbtips-robo-injected-script";
 const API_BASE = "https://bbtips-server-production.up.railway.app";
 let CHECK_TIMER = null;
+let LAST_BRIDGE_SEND = 0;
+
+function injectRemoteConfig(apiBase, token, username) {
+  const cfg = document.createElement("script");
+  cfg.textContent = `window.__BBTIPS_REMOTE_CONFIG=${JSON.stringify({
+    apiBase,
+    token: String(token || ""),
+    username: username || ""
+  })};`;
+  (document.head || document.documentElement).appendChild(cfg);
+  cfg.remove();
+}
+
+async function sendCollectorRows(rows, sentAt) {
+  const now = Date.now();
+  if (!Array.isArray(rows) || !rows.length || now - LAST_BRIDGE_SEND < 35000) return;
+  LAST_BRIDGE_SEND = now;
+  const res = await chrome.storage.local.get(["bbtips_token", "bbtips_api_base"]);
+  const token = res.bbtips_token || "";
+  if (!token) return;
+  const apiBase = res.bbtips_api_base || API_BASE;
+  await fetch(`${apiBase}/api/telemetry`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${token}`
+    },
+    body: JSON.stringify({
+      kind: "collector_rows",
+      sentAt: sentAt ? new Date(sentAt).toISOString() : new Date().toISOString(),
+      url: location.href,
+      source: "content_bridge",
+      rows
+    })
+  }).catch(() => {});
+}
+
+window.addEventListener("message", (event) => {
+  if (event.source !== window) return;
+  const msg = event.data || {};
+  if (msg.type !== "BBTIPS_AGENT_ROWS" || msg.source !== "bbtips_extension") return;
+  sendCollectorRows(msg.rows, msg.sentAt);
+});
 
 async function injectRobot() {
   if (document.getElementById(SCRIPT_ID)) return;
-  const res = await chrome.storage.local.get(["bbtips_token", "bbtips_api_base"]);
+  const res = await chrome.storage.local.get(["bbtips_token", "bbtips_api_base", "bbtips_user"]);
   const apiBase = res.bbtips_api_base || API_BASE;
   const token = res.bbtips_token || "";
+  injectRemoteConfig(apiBase, token, res.bbtips_user || "");
   const s = document.createElement("script");
   s.id = SCRIPT_ID;
   s.src = `${apiBase}/api/robo.js?token=${encodeURIComponent(token)}&v=${Date.now()}`;
