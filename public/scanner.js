@@ -444,7 +444,8 @@ async function loadData() {
   state.rows = Array.isArray(data.rows) ? data.rows : [];
   const errorText = Array.isArray(data.apiErrors) && data.apiErrors.length ? ` | erros API: ${data.apiErrors.length}` : "";
   const apiText = data.apiFetchedAt ? `api: ${new Date(data.apiFetchedAt).toLocaleTimeString()}` : "api sem dados";
-  const collectorText = data.lastEventAt ? `coletor: ${new Date(data.lastEventAt).toLocaleTimeString()}` : "coletor sem envio";
+  const scopeText = data.telemetryScope === "ultima_coleta" ? "geral" : "usuario";
+  const collectorText = data.lastEventAt ? `coletor ${scopeText}: ${new Date(data.lastEventAt).toLocaleTimeString()}` : "coletor sem envio";
   els.count.textContent = `${data.count || state.rows.length} linhas | ${data.platform || platform}${errorText}`;
   els.last.textContent = `${apiText} | ${collectorText}`;
   render();

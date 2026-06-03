@@ -292,7 +292,7 @@ app.get("/api/scanner-data", requireUserOrAdmin, async (req, res) => {
   const username = req.auth.type === "admin" && req.query.user ? String(req.query.user) : req.auth.username;
   const rawPlatform = String(req.query.platform || "BET365").replace(/[^a-z0-9_-]/ig, "").toUpperCase();
   const platform = rawPlatform === "TODAS" ? "TODAS" : rawPlatform || "BET365";
-  const telemetry = await pool.query(`
+  let telemetry = await pool.query(`
     select username, payload, created_at
     from telemetry
     where kind = 'collector_rows'
@@ -300,6 +300,17 @@ app.get("/api/scanner-data", requireUserOrAdmin, async (req, res) => {
     order by id desc
     limit $2
   `, [username || null, limit]);
+  let telemetryScope = "usuario";
+  if (!telemetry.rows.length) {
+    telemetry = await pool.query(`
+      select username, payload, created_at
+      from telemetry
+      where kind = 'collector_rows'
+      order by id desc
+      limit $1
+    `, [limit]);
+    telemetryScope = telemetry.rows.length ? "ultima_coleta" : "vazio";
+  }
   const apiData = platform === "TODAS"
     ? { at: Date.now(), rows: [], errors: [], platform }
     : await fetchScannerApiRows(platform);
@@ -356,6 +367,7 @@ app.get("/api/scanner-data", requireUserOrAdmin, async (req, res) => {
     count: out.length,
     rows: out,
     lastEventAt: telemetry.rows[0]?.created_at || null,
+    telemetryScope,
     apiFetchedAt: new Date(apiData.at).toISOString(),
     apiErrors: apiData.errors
   });
