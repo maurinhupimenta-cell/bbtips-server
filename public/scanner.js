@@ -227,7 +227,7 @@ function upcomingRows(liga, market) {
   return uniqueRows(state.rows)
     .filter(row => Number(row.liga) === Number(liga) && row.future && !row.score && (row.name || row.time) && isFutureTime(row.time))
     .sort((a, b) => futureDistance(a) - futureDistance(b))
-    .slice(0, 20);
+    .slice(0, 6);
 }
 
 function pct(rows, market) {

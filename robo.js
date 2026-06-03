@@ -402,6 +402,9 @@ function gameRowsForTelemetry(games=[]){
     };
   });
 }
+function isVisibleFutureRow(r){
+  return r&&r.future&&!r.score&&(r.api==="dom-grid"||r.api==="robot-game");
+}
 function rowsForTelemetry(seed=[]){
   const by={};
   const hours=currentHours();
@@ -418,7 +421,7 @@ function rowsForTelemetry(seed=[]){
   });
   const out=[],seen=new Set();
   Object.values(groups).forEach(group=>{
-    const futures=group.filter(r=>r.future&&!r.score&&(!r.time||isFuture(r.time))).sort((a,b)=>(parseTime(a.time)??9999)-(parseTime(b.time)??9999)).slice(0,50);
+    const futures=group.filter(r=>isVisibleFutureRow(r)&&(!r.time||isFuture(r.time))).sort((a,b)=>(parseTime(a.time)??9999)-(parseTime(b.time)??9999)).slice(0,6);
     const hist=group.filter(r=>r.score&&!r.future).slice(-540);
     [...futures,...hist].forEach(r=>{
       const row=compactTelemetryRow(r);

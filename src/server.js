@@ -149,6 +149,11 @@ function scannerCanonicalKey(row, liga, platform) {
   ].join("|");
 }
 
+function scannerVisibleFutureSource(row) {
+  const api = String(row?.api || "");
+  return api === "dom-grid" || api === "robot-game";
+}
+
 function parseScannerOdds(raw) {
   if (!raw) return {};
   if (typeof raw === "object") return raw;
@@ -370,6 +375,7 @@ app.get("/api/scanner-data", requireUserOrAdmin, async (req, res) => {
     if (payloadHours && payloadHours !== activeHours) continue;
     const hasMatchingFuture = payloadRows.some(row => {
       if (!row || typeof row !== "object" || row.score || !row.future) return false;
+      if (!scannerVisibleFutureSource(row)) return false;
       const rowPlatform = String(row.platform || payloadPlatform || "").toUpperCase();
       const rawRowHours = normalizeScannerHours(row.hours);
       const rowHours = rawRowHours || payloadHours || (requestedHours ? null : activeHours);
@@ -415,6 +421,7 @@ app.get("/api/scanner-data", requireUserOrAdmin, async (req, res) => {
       const rawRowHours = normalizeScannerHours(row.hours);
       const rowHours = rawRowHours || payloadHours || (requestedHours ? null : activeHours);
       if (!rowHours || rowHours !== activeHours) continue;
+      if (row.future && !row.score && !scannerVisibleFutureSource(row)) continue;
       if (row.future && !row.score && latestFutureAt && item.created_at !== latestFutureAt) continue;
       const resolvedLiga = Number(row.liga) || (!row.score && row.future ? payloadLiga : null);
       if (!resolvedLiga) continue;
