@@ -174,6 +174,29 @@ function rowHourInfo(cells){
   }
   return null;
 }
+function minuteHeaderIndex(cells){
+  for(let i=0;i<Math.min(cells.length,5);i++){
+    const txt=esc(cells[i]?.innerText||"").trim().toLowerCase();
+    if(txt==="h"||txt==="hora"||txt==="horario")return i;
+  }
+  return -1;
+}
+function fillMinuteByCol(rows){
+  const minuteByCol={};
+  rows.forEach(tr=>{
+    const cells=[...tr.children];
+    const headerIndex=minuteHeaderIndex(cells);
+    if(headerIndex<0)return;
+    cells.forEach((c,i)=>{
+      if(i<=headerIndex)return;
+      const txt=esc(c.innerText||"").trim();
+      if(!/^\d{1,2}$/.test(txt))return;
+      const n=Number(txt);
+      if(Number.isInteger(n)&&n>=0&&n<60)minuteByCol[i]=n;
+    });
+  });
+  return minuteByCol;
+}
 function txtFromApiRow(r){
   const odds=MARKETS.map(m=>{
     const v=oddFromObj(r.odds,m);
@@ -315,17 +338,7 @@ function readGridRowsForTelemetry(){
   const hours=currentHours();
   document.querySelectorAll("table").forEach(table=>{
     const rows=[...table.querySelectorAll("tr")];
-    const minuteByCol={};
-    rows.forEach(tr=>{
-      const cells=[...tr.children];
-      const first=esc(cells[0]?.innerText||"").toLowerCase();
-      if(first==="h"||first==="horario"||first==="hora"){
-        cells.forEach((c,i)=>{
-          const n=Number(esc(c.innerText));
-          if(Number.isInteger(n)&&n>=0&&n<60)minuteByCol[i]=n;
-        });
-      }
-    });
+    const minuteByCol=fillMinuteByCol(rows);
     rows.forEach(tr=>{
       const cells=[...tr.children];
       const hourInfo=rowHourInfo(cells);
@@ -598,13 +611,31 @@ function hoursFromUrl(url){
   }catch(e){return null}
 }
 function currentHours(){
+  const read=text=>{
+    const hit=String(text||"").match(/\b(\d+)\s*horas?\b/i)||String(text||"").match(/\bHoras\s*(\d+)\b/i);
+    return hit?`Horas${hit[1]}`:null;
+  };
   try{
     let selected="";
     document.querySelectorAll("select").forEach(s=>{
       selected+=" "+esc(s.selectedOptions?.[0]?.innerText||s.value||"");
     });
-    const hit=selected.match(/\b(\d+)\s*horas?\b/i)||selected.match(/\bHoras\s*(\d+)\b/i);
-    if(hit)return `Horas${hit[1]}`;
+    const fromSelect=read(selected);
+    if(fromSelect)return fromSelect;
+    let active="";
+    document.querySelectorAll("button,div,span,label").forEach(el=>{
+      const r=el.getBoundingClientRect?.();
+      if(!r||r.width<20||r.height<12||r.top<0||r.top>260)return;
+      const txt=esc(el.innerText||"").trim();
+      if(!/\b\d+\s*horas?\b/i.test(txt)&&!/\bHoras\s*\d+\b/i.test(txt))return;
+      const cls=(el.className||"").toString();
+      const st=getComputedStyle(el);
+      const bg=st.backgroundColor||"";
+      const isSelected=/active|selected|ativo|current/i.test(cls)||el.getAttribute?.("aria-selected")==="true"||el.getAttribute?.("aria-current")||/rgb\(.*(70|71|72|73|74|75|76|77|78|79|80)/.test(bg);
+      active+=" "+(isSelected?`${txt} `:"")+txt;
+    });
+    const fromActive=read(active);
+    if(fromActive)return fromActive;
   }catch(e){}
   return CONFIG.horas||"Horas3";
 }
@@ -652,17 +683,7 @@ function readGridGames(){
   const liga=activeLiga();
   document.querySelectorAll("table").forEach(table=>{
     const rows=[...table.querySelectorAll("tr")];
-    const minuteByCol={};
-    rows.forEach(tr=>{
-      const cells=[...tr.children];
-      const first=esc(cells[0]?.innerText||"").toLowerCase();
-      if(first==="h"||first==="horario"||first==="hora"){
-        cells.forEach((c,i)=>{
-          const n=Number(esc(c.innerText));
-          if(Number.isInteger(n)&&n>=0&&n<60)minuteByCol[i]=n;
-        });
-      }
-    });
+    const minuteByCol=fillMinuteByCol(rows);
     rows.forEach(tr=>{
       const cells=[...tr.children];
       const hourInfo=rowHourInfo(cells);

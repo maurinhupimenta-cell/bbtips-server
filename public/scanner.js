@@ -90,6 +90,7 @@ const MARKETS = {
 
 const els = {
   platform: document.getElementById("platform"),
+  hours: document.getElementById("hours"),
   market: document.getElementById("market"),
   refresh: document.getElementById("refresh"),
   all: document.getElementById("all"),
@@ -108,6 +109,7 @@ const state = {
   token: localStorage.getItem("scanner_token") || "",
   username: localStorage.getItem("scanner_user") || "",
   platform: localStorage.getItem("scanner_platform") || "BET365",
+  hours: localStorage.getItem("scanner_hours") || "",
   rows: [],
   selectedLiga: null
 };
@@ -449,9 +451,12 @@ async function loadData() {
   }
   els.session.textContent = `logado: ${state.username || "usuario"}`;
   const platform = (els.platform.value || "BET365").toUpperCase();
+  const hours = els.hours.value || "";
   state.platform = platform;
+  state.hours = hours;
   localStorage.setItem("scanner_platform", platform);
-  const response = await fetch(`${API_BASE}/api/scanner-data?limit=160&platform=${encodeURIComponent(platform)}`, {
+  localStorage.setItem("scanner_hours", hours);
+  const response = await fetch(`${API_BASE}/api/scanner-data?limit=160&platform=${encodeURIComponent(platform)}&hours=${encodeURIComponent(hours)}`, {
     headers: { Authorization: `Bearer ${state.token}` }
   });
   const data = await response.json().catch(() => ({}));
@@ -481,6 +486,7 @@ els.logout.addEventListener("click", () => {
 });
 els.refresh.addEventListener("click", loadData);
 els.platform.addEventListener("change", loadData);
+els.hours.addEventListener("change", loadData);
 els.all.addEventListener("click", () => {
   state.selectedLiga = null;
   render();
@@ -490,6 +496,7 @@ els.market.addEventListener("change", render);
 els.user.value = state.username;
 els.platform.value = state.platform;
 if (!els.platform.value) els.platform.value = "BET365";
+els.hours.value = state.hours;
 render();
 if (state.token) loadData();
 setInterval(loadData, 30000);
