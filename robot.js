@@ -434,7 +434,7 @@ function gameRowsForTelemetry(games=[]){
 function isVisibleFutureRow(r){
   if(!r||!r.future||r.score)return false;
   const api=String(r.api||"");
-  return api==="dom-grid"||api==="robot-game";
+  return api==="dom-grid"||api==="robot-game"||/futebolvirtual/i.test(api);
 }
 function rowsForTelemetry(seed=[]){
   const by={};

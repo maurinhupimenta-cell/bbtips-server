@@ -150,9 +150,13 @@ function scannerCanonicalKey(row, liga, platform) {
   ].join("|");
 }
 
-function scannerVisibleFutureSource(row) {
+function scannerVisibleFutureSource(row, allowApiFuture = false) {
   const api = String(row?.api || "");
-  return api === "dom-grid" || api === "robot-game";
+  return api === "dom-grid" || api === "robot-game" || (allowApiFuture && /futebolvirtual/i.test(api));
+}
+
+function scannerPayloadHasVisibleAnchor(rows) {
+  return Array.isArray(rows) && rows.some(row => row && !row.score && row.future && scannerVisibleFutureSource(row, false));
 }
 
 function parseScannerOdds(raw) {
@@ -375,6 +379,7 @@ app.get("/api/scanner-data", requireUserOrAdmin, async (req, res) => {
     const payload = item.payload || {};
     const payloadRows = Array.isArray(payload.rows) ? payload.rows : [];
     const payloadPlatform = String(payload.platform || "").toUpperCase();
+    const allowApiFuture = Boolean(payload.force) && scannerPayloadHasVisibleAnchor(payloadRows);
     const rawPayloadHours = payload.hours === undefined || payload.hours === null ? "" : String(payload.hours);
     const payloadHours = normalizeScannerHours(payload.hours) || null;
     if (rawPayloadHours && !payloadHours) continue;
@@ -390,7 +395,7 @@ app.get("/api/scanner-data", requireUserOrAdmin, async (req, res) => {
     const payloadLiga = Number(payload.liga) || majorityLiga;
     for (const row of payloadRows) {
       if (!row || typeof row !== "object" || row.score || !row.future) continue;
-      if (!scannerVisibleFutureSource(row)) continue;
+      if (!scannerVisibleFutureSource(row, allowApiFuture)) continue;
       const rowPlatform = String(row.platform || payloadPlatform || "").toUpperCase();
       const rawRowHoursValue = row.hours === undefined || row.hours === null ? "" : String(row.hours);
       const rawRowHours = normalizeScannerHours(row.hours);
@@ -420,6 +425,7 @@ app.get("/api/scanner-data", requireUserOrAdmin, async (req, res) => {
     const payload = item.payload || {};
     const payloadRows = Array.isArray(payload.rows) ? payload.rows : [];
     const payloadPlatform = String(payload.platform || "").toUpperCase();
+    const allowApiFuture = Boolean(payload.force) && scannerPayloadHasVisibleAnchor(payloadRows);
     const rawPayloadHours = payload.hours === undefined || payload.hours === null ? "" : String(payload.hours);
     const payloadHours = normalizeScannerHours(payload.hours) || null;
     if (rawPayloadHours && !payloadHours) continue;
@@ -447,7 +453,7 @@ app.get("/api/scanner-data", requireUserOrAdmin, async (req, res) => {
       if (!resolvedLiga) continue;
       if (row.future && !row.score) {
         if (!Number.isFinite(itemMs) || requestNow - itemMs > scannerFutureTtlMs) continue;
-        if (!scannerVisibleFutureSource(row)) continue;
+        if (!scannerVisibleFutureSource(row, allowApiFuture)) continue;
         const latestFutureMs = latestFutureMsByLiga.get(resolvedLiga);
         if (!latestFutureMs || itemMs !== latestFutureMs) continue;
       }
