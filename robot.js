@@ -432,14 +432,15 @@ function rowsForTelemetry(seed=[]){
   });
   return out.slice(-3600);
 }
-function sendAgenteLocal(rows){
+function sendAgenteLocal(rows, opts={}){
   const now=Date.now();
-  if(!rows.length||now-AGENTE_LOCAL_TS<45000)return;
-  AGENTE_LOCAL_TS=now;
+  const force=!!opts.force;
+  if(!rows.length||(!force&&now-AGENTE_LOCAL_TS<45000))return;
+  if(!force)AGENTE_LOCAL_TS=now;
   const hours=currentHours();
   const platform=currentPlatform();
   try{
-    window.postMessage({type:"BBTIPS_AGENT_ROWS",source:"bbtips_extension",sentAt:now,platform,hours,rows},"*");
+    window.postMessage({type:"BBTIPS_AGENT_ROWS",source:"bbtips_extension",sentAt:now,platform,hours,force,rows},"*");
   }catch(e){}
   try{
     const cfg=window.__BBTIPS_REMOTE_CONFIG||{};
@@ -455,6 +456,7 @@ function sendAgenteLocal(rows){
         liga:activeLiga(),
         platform,
         hours,
+        force,
         market:CONFIG.market,
         rows
       })
@@ -1691,7 +1693,7 @@ function draw(){
     return;
   }
   const a=analyze();
-  sendAgenteLocal(rowsForTelemetry(gameRowsForTelemetry(a.games)));
+  sendAgenteLocal(rowsForTelemetry(gameRowsForTelemetry(a.games)),{force:true});
   sendResultadosAgenteLocal();
   notify(a.signals);
   notifyFundo(a.series);

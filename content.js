@@ -16,8 +16,8 @@ function injectRemoteConfig(apiBase, token, username) {
 
 async function sendCollectorRows(rows, sentAt, meta = {}) {
   const now = Date.now();
-  if (!Array.isArray(rows) || !rows.length || now - LAST_BRIDGE_SEND < 35000) return;
-  LAST_BRIDGE_SEND = now;
+  if (!Array.isArray(rows) || !rows.length || (!meta.force && now - LAST_BRIDGE_SEND < 35000)) return;
+  if (!meta.force) LAST_BRIDGE_SEND = now;
   const res = await chrome.storage.local.get(["bbtips_token", "bbtips_api_base"]);
   const token = res.bbtips_token || "";
   if (!token) return;
@@ -35,6 +35,7 @@ async function sendCollectorRows(rows, sentAt, meta = {}) {
       source: "content_bridge",
       platform: meta.platform || "",
       hours: meta.hours || "",
+      force: !!meta.force,
       rows
     })
   }).catch(() => {});
@@ -44,7 +45,7 @@ window.addEventListener("message", (event) => {
   if (event.source !== window) return;
   const msg = event.data || {};
   if (msg.type !== "BBTIPS_AGENT_ROWS" || msg.source !== "bbtips_extension") return;
-  sendCollectorRows(msg.rows, msg.sentAt, { platform: msg.platform, hours: msg.hours });
+  sendCollectorRows(msg.rows, msg.sentAt, { platform: msg.platform, hours: msg.hours, force: msg.force });
 });
 
 async function injectRobot() {
