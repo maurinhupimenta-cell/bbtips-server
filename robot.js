@@ -325,8 +325,7 @@ function saveApiRows(rows){
   rows.forEach(r=>by[r.key]=r);
   API_ROWS=Object.values(by).slice(-5000);
   localStorage.setItem(API_STORE,JSON.stringify(API_ROWS));
-  const historyRows=rows.filter(r=>r&&r.score&&!r.future);
-  if(historyRows.length)sendAgenteLocal(rowsForTelemetry(historyRows).filter(r=>r.score&&!r.future));
+  sendAgenteLocal(rowsForTelemetry(rows));
 }
 function compactTelemetryRow(r){
   const odds={};
