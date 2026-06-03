@@ -14,11 +14,29 @@ const LIGAS = [
 ];
 
 const MARKETS = {
+  over15: {
+    name: "Over 1.5",
+    aliases: ["o15", "over15", "over_15", "odd_over_1.5"],
+    patterns: [/o15@?(\d+[,.]\d+)/ig, /over\s*1[,.]?5@?(\d+[,.]\d+)/ig],
+    pays: score => score.t >= 2
+  },
+  under15: {
+    name: "Under 1.5",
+    aliases: ["u15", "under15", "under_15", "odd_under_1.5"],
+    patterns: [/u15@?(\d+[,.]\d+)/ig, /under\s*1[,.]?5@?(\d+[,.]\d+)/ig],
+    pays: score => score.t <= 1
+  },
   over25: {
     name: "Over 2.5",
     aliases: ["o25", "over25", "over_25", "odd_over_2.5"],
     patterns: [/o25@?(\d+[,.]\d+)/ig, /over\s*2[,.]?5@?(\d+[,.]\d+)/ig],
     pays: score => score.t >= 3
+  },
+  under25: {
+    name: "Under 2.5",
+    aliases: ["u25", "under25", "under_25", "odd_under_2.5"],
+    patterns: [/u25@?(\d+[,.]\d+)/ig, /under\s*2[,.]?5@?(\d+[,.]\d+)/ig],
+    pays: score => score.t <= 2
   },
   ambas_sim: {
     name: "Ambas Sim",
@@ -26,15 +44,52 @@ const MARKETS = {
     patterns: [/ambs@?(\d+[,.]\d+)/ig, /ambas\s*sim@?(\d+[,.]\d+)/ig],
     pays: score => score.a > 0 && score.b > 0
   },
+  ambas_nao: {
+    name: "Ambas Nao",
+    aliases: ["ambn", "ambas_nao", "odd_ambas_nao"],
+    patterns: [/ambn@?(\d+[,.]\d+)/ig, /ambas\s*nao@?(\d+[,.]\d+)/ig],
+    pays: score => score.a === 0 || score.b === 0
+  },
   over35: {
     name: "Over 3.5",
     aliases: ["o35", "over35", "over_35", "odd_over_3.5"],
     patterns: [/o35@?(\d+[,.]\d+)/ig, /over\s*3[,.]?5@?(\d+[,.]\d+)/ig],
     pays: score => score.t >= 4
+  },
+  under35: {
+    name: "Under 3.5",
+    aliases: ["u35", "under35", "under_35", "odd_under_3.5"],
+    patterns: [/u35@?(\d+[,.]\d+)/ig, /under\s*3[,.]?5@?(\d+[,.]\d+)/ig],
+    pays: score => score.t <= 3
+  },
+  over5: {
+    name: "5+ Gols",
+    aliases: ["o5", "ge5", "e5+", "e5", "over5", "over_5", "5+", "odd_over_5", "odd_ge5", "odd_5+"],
+    patterns: [/o5@?(\d+[,.]\d+)/ig, /ge5@?(\d+[,.]\d+)/ig, /5\+@?(\d+[,.]\d+)/ig],
+    pays: score => score.t >= 5
+  },
+  casa_vence: {
+    name: "Casa Vence",
+    aliases: ["ftc", "casa", "casa_vence", "cv", "home", "mandante", "time_casa", "timea", "time_a", "odd_ftc", "odd_casa", "odd_home"],
+    patterns: [/ftc@?(\d+[,.]\d+)/ig, /casa@?(\d+[,.]\d+)/ig, /casa\s*vence@?(\d+[,.]\d+)/ig, /home@?(\d+[,.]\d+)/ig],
+    pays: score => score.a > score.b
+  },
+  empate: {
+    name: "Empate",
+    aliases: ["fte", "empate", "draw", "x", "odd_fte", "odd_empate", "odd_draw", "odd_x"],
+    patterns: [/fte@?(\d+[,.]\d+)/ig, /empate@?(\d+[,.]\d+)/ig, /draw@?(\d+[,.]\d+)/ig],
+    pays: score => score.a === score.b
+  },
+  fora_vence: {
+    name: "Visitante Vence",
+    aliases: ["ftv", "fora", "fora_vence", "fv", "away", "visitante", "time_fora", "timeb", "time_b", "odd_ftv", "odd_fora", "odd_away"],
+    patterns: [/ftv@?(\d+[,.]\d+)/ig, /fora@?(\d+[,.]\d+)/ig, /visitante@?(\d+[,.]\d+)/ig, /away@?(\d+[,.]\d+)/ig],
+    pays: score => score.b > score.a
   }
 };
 
 const els = {
+  platform: document.getElementById("platform"),
   market: document.getElementById("market"),
   refresh: document.getElementById("refresh"),
   all: document.getElementById("all"),
@@ -52,6 +107,7 @@ const els = {
 const state = {
   token: localStorage.getItem("scanner_token") || "",
   username: localStorage.getItem("scanner_user") || "",
+  platform: localStorage.getItem("scanner_platform") || "BET365",
   rows: [],
   selectedLiga: null
 };
@@ -302,8 +358,12 @@ function render() {
   const games = summaries
     .filter(item => !state.selectedLiga || item.liga === state.selectedLiga)
     .flatMap(item => item.upcoming.map(game => ({ ...game, liga: item.liga, ligaName: item.name, history: item.history })))
-    .sort((a, b) => b.rank - a.rank || (b.ev ?? -999) - (a.ev ?? -999) || futureDistance(a.row) - futureDistance(b.row))
-    .slice(0, 80);
+    .sort((a, b) => {
+      const la = LIGAS.findIndex(([liga]) => Number(liga) === Number(a.liga));
+      const lb = LIGAS.findIndex(([liga]) => Number(liga) === Number(b.liga));
+      return la - lb || futureDistance(a.row) - futureDistance(b.row) || b.rank - a.rank || (b.ev ?? -999) - (a.ev ?? -999);
+    })
+    .slice(0, 240);
 
   els.games.innerHTML = games.length ? games.map(game => {
     const lineText = game.line480.j ? `480: ${game.line480.g}/${game.line480.j} ${fmtPct(game.line480.p)} min ${fmtPct(game.line480.min)}` : "sem linha";
@@ -312,6 +372,7 @@ function render() {
     return `
       <tr>
         <td>${esc(game.ligaName)}</td>
+        <td>${esc(game.row.platform || "-")}</td>
         <td>${esc(game.row.time || "-")}</td>
         <td>${esc(game.row.name || "-")}</td>
         <td class="num">${game.oddValue ? game.oddValue.toFixed(2) : "-"}</td>
@@ -329,7 +390,7 @@ function render() {
         <td>${lineText}</td>
       </tr>
     `;
-  }).join("") : `<tr><td colspan="8" class="muted">Sem jogos coletados ainda. Deixe uma aba do BBTips aberta com a extensao ativa e clique Atualizar.</td></tr>`;
+  }).join("") : `<tr><td colspan="9" class="muted">Sem jogos carregados ainda. Clique Atualizar; se continuar vazio, a API desta casa/mercado nao retornou dados agora.</td></tr>`;
 }
 
 async function login() {
@@ -369,7 +430,10 @@ async function loadData() {
     return;
   }
   els.session.textContent = `logado: ${state.username || "usuario"}`;
-  const response = await fetch(`${API_BASE}/api/scanner-data?limit=80`, {
+  const platform = (els.platform.value || "BET365").toUpperCase();
+  state.platform = platform;
+  localStorage.setItem("scanner_platform", platform);
+  const response = await fetch(`${API_BASE}/api/scanner-data?limit=160&platform=${encodeURIComponent(platform)}`, {
     headers: { Authorization: `Bearer ${state.token}` }
   });
   const data = await response.json().catch(() => ({}));
@@ -378,8 +442,11 @@ async function loadData() {
     return;
   }
   state.rows = Array.isArray(data.rows) ? data.rows : [];
-  els.count.textContent = `${data.count || state.rows.length} linhas`;
-  els.last.textContent = data.lastEventAt ? `ultimo envio: ${new Date(data.lastEventAt).toLocaleTimeString()}` : "sem envio";
+  const errorText = Array.isArray(data.apiErrors) && data.apiErrors.length ? ` | erros API: ${data.apiErrors.length}` : "";
+  const apiText = data.apiFetchedAt ? `api: ${new Date(data.apiFetchedAt).toLocaleTimeString()}` : "api sem dados";
+  const collectorText = data.lastEventAt ? `coletor: ${new Date(data.lastEventAt).toLocaleTimeString()}` : "coletor sem envio";
+  els.count.textContent = `${data.count || state.rows.length} linhas | ${data.platform || platform}${errorText}`;
+  els.last.textContent = `${apiText} | ${collectorText}`;
   render();
 }
 
@@ -394,6 +461,7 @@ els.logout.addEventListener("click", () => {
   render();
 });
 els.refresh.addEventListener("click", loadData);
+els.platform.addEventListener("change", loadData);
 els.all.addEventListener("click", () => {
   state.selectedLiga = null;
   render();
@@ -401,6 +469,8 @@ els.all.addEventListener("click", () => {
 els.market.addEventListener("change", render);
 
 els.user.value = state.username;
+els.platform.value = state.platform;
+if (!els.platform.value) els.platform.value = "BET365";
 render();
 if (state.token) loadData();
 setInterval(loadData, 30000);

@@ -10,7 +10,7 @@ let LAST_HIST_SAVE_TS=0;
 document.getElementById(PANEL)?.remove();
 document.getElementById(PANEL+"-style")?.remove();
 clearInterval(window[TIMER]);
-["BBTIPS_FINAL_ROBO_TIMER","BBTIPS_API_ALERTAS_TIMER","BBTIPS_INTERCEPTA_API_TIMER","BBTIPS_PRO_TRADER_TIMER","HB_MULTI_TIMER"].forEach(k=>{try{clearInterval(window[k])}catch(e){}});
+["BBTIPS_FINAL_ROBO_TIMER","BBTIPS_API_ALERTAS_TIMER","BBTIPS_INTERCEPTA_API_TIMER","BBTIPS_PRO_TRADER_TIMER","HB_MULTI_TIMER","BBTIPS_SCANNER_COLLECT_TIMER"].forEach(k=>{try{clearInterval(window[k])}catch(e){}});
 ["bbtips-api-alertas","bbtips-intercepta-api","hb-multi","hb-tips-scanner"].forEach(id=>document.getElementById(id)?.remove());
 
 const CONFIG={market:"over25",tol:0.8,minEV:3,minProb:52,minOddPct:45,minOddSample:30,minTeamSample:30,maxProximos:6,intervalMs:25000,windows:[120,240,480,960],ligas:[1,2,3,4,5,6],ligaAuto:true,horas:"Horas3",filtros:"o15,o25,u25,ambs,ambn,o35,u15,u35,ge5,tgv5,tgc5,ftc,fte,ftv"};
@@ -23,6 +23,7 @@ let DRAW_PENDING=false;
 let DRAW_TIMER=null;
 let LAST_RESULTS_REFRESH=0;
 let LAST_API_LOAD=0;
+let SCANNER_COLLECTING=false;
 let RESULT_WINDOWS_CACHE={key:"",rows:null};
 const MARKETS=[
   {key:"ambas_sim",name:"Ambas Sim",patterns:[/ambs@?(\d+[,.]\d+)/ig,/ambas\s*sim@?(\d+[,.]\d+)/ig],label:/ambs|ambas\s*sim|ambas\s*marcam/i},
@@ -249,6 +250,7 @@ function flattenApi(json,url){
         score,
         odds,
         future,
+        platform:platformFromUrl(url),
         api:url,
         idx:li*100+ci
       });
@@ -263,14 +265,54 @@ function saveApiRows(rows){
   rows.forEach(r=>by[r.key]=r);
   API_ROWS=Object.values(by).slice(-5000);
   localStorage.setItem(API_STORE,JSON.stringify(API_ROWS));
-  sendAgenteLocal(rows);
+  sendAgenteLocal(rowsForTelemetry(rows));
+}
+function compactTelemetryRow(r){
+  const odds={};
+  Object.entries(r.odds||{}).forEach(([k,v])=>{
+    const n=Number(String(v).replace(",","."));
+    if(Number.isFinite(n)&&n>1)odds[k]=Math.round(n*100)/100;
+  });
+  return {
+    key:String(r.key||[r.liga||"",r.time||"",r.name||"",r.score?`${r.score.a}-${r.score.b}`:"",r.future?"f":"h"].join("|")),
+    liga:r.liga??ligaFromUrl(r.api||"")??null,
+    time:String(r.time||""),
+    name:String(r.name||""),
+    score:r.score||null,
+    odds,
+    future:!!r.future,
+    platform:String(r.platform||platformFromUrl(r.api||"")).toUpperCase(),
+    api:String(r.api||"").slice(0,240),
+    idx:Number(r.idx||0)
+  };
+}
+function rowsForTelemetry(seed=[]){
+  const by={};
+  [...API_ROWS,...seed].forEach(r=>{if(r&&typeof r==="object")by[r.key||JSON.stringify([r.liga,r.time,r.name,r.idx])]=r});
+  const groups={};
+  Object.values(by).forEach(r=>{
+    const liga=r.liga??ligaFromUrl(r.api||"")??"auto";
+    (groups[liga]||(groups[liga]=[])).push(r);
+  });
+  const out=[],seen=new Set();
+  Object.values(groups).forEach(group=>{
+    const futures=group.filter(r=>r.future&&!r.score).sort((a,b)=>(parseTime(a.time)??9999)-(parseTime(b.time)??9999)).slice(0,50);
+    const hist=group.filter(r=>r.score&&!r.future).slice(-540);
+    [...futures,...hist].forEach(r=>{
+      const row=compactTelemetryRow(r);
+      if(seen.has(row.key))return;
+      seen.add(row.key);
+      out.push(row);
+    });
+  });
+  return out.slice(-3600);
 }
 function sendAgenteLocal(rows){
   const now=Date.now();
-  if(!rows.length||now-AGENTE_LOCAL_TS<60000)return;
+  if(!rows.length||now-AGENTE_LOCAL_TS<45000)return;
   AGENTE_LOCAL_TS=now;
   try{
-    window.postMessage({type:"BBTIPS_AGENT_ROWS",source:"bbtips_extension",sentAt:now,rows:rows.slice(-250)},"*");
+    window.postMessage({type:"BBTIPS_AGENT_ROWS",source:"bbtips_extension",sentAt:now,rows},"*");
   }catch(e){}
   try{
     const cfg=window.__BBTIPS_REMOTE_CONFIG||{};
@@ -284,8 +326,9 @@ function sendAgenteLocal(rows){
         sentAt:new Date(now).toISOString(),
         url:location.href,
         liga:activeLiga(),
+        platform:currentPlatform(),
         market:CONFIG.market,
-        rows:rows.slice(-250)
+        rows
       })
     }).catch(()=>{});
   }catch(e){}
@@ -332,9 +375,14 @@ function saveStoredResults(rows){
   LAST_HIST_SAVE_TS=now;
   try{localStorage.setItem(HIST_STORE,JSON.stringify(rows.slice(0,2500)))}catch(e){}
 }
-function processApiText(url,text){
+function processApiText(url,text,opts={}){
   if(!/futebolvirtual|Linhas|Colunas|TimeA|TimeB|Odds|Resultado/i.test(String(url)+" "+String(text).slice(0,500)))return;
-  try{saveApiRows(flattenApi(JSON.parse(text),url))}catch(e){}
+  try{
+    const rows=flattenApi(JSON.parse(text),url);
+    if(opts.returnRows)return rows;
+    saveApiRows(rows);
+    return rows;
+  }catch(e){return []}
 }
 function hookApi(){
   if(!window.__BBTIPS_FINAL_API_HOOK&&window.fetch){
@@ -388,25 +436,73 @@ function activeLiga(){
   return best;
 }
 function ligaNome(){const l=activeLiga();return l?`Liga ${l}`:"Liga auto"}
-function apiUrl(liga,futuro){
-  return `https://api.thtips.com.br/api/futebolvirtual?liga=${liga}&futuro=${futuro?"true":"false"}&Horas=${CONFIG.horas}&tipoOdd=&dadosAlteracao=&filtros=${encodeURIComponent(CONFIG.filtros)}&confrontos=false&hrsConfrontos=240`;
+function currentPlatform(){
+  const known=[
+    ["BET365",/\bbet\s*365\b/i],
+    ["PLAYPIX",/\bplay\s*pix\b/i],
+    ["KIRON",/\bkiron\b/i],
+    ["SUPERBET",/\bsuper\s*bet\b/i],
+    ["BETANO",/\bbetano\b/i],
+    ["SPORTINGBET",/\bsporting\s*bet\b/i],
+    ["BETFAIR",/\bbetfair\b/i],
+    ["NOVIBET",/\bnovibet\b/i]
+  ];
+  const fromText=text=>{
+    const found=known.find(([,re])=>re.test(text||""));
+    return found?found[0]:null;
+  };
+  try{
+    let selected="";
+    document.querySelectorAll("select").forEach(s=>{
+      selected+=" "+esc(s.selectedOptions?.[0]?.innerText||s.value||"");
+    });
+    const fromSelected=fromText(selected);
+    if(fromSelected)return fromSelected;
+    let active="";
+    document.querySelectorAll("button,div,span,a,li").forEach(el=>{
+      const cls=(el.className||"").toString();
+      const aria=el.getAttribute?.("aria-selected")==="true"||el.getAttribute?.("aria-current");
+      if(!aria&&!/active|selected|ativo|current/i.test(cls))return;
+      active+=" "+esc(el.innerText||"");
+    });
+    const fromActive=fromText(active);
+    if(fromActive)return fromActive;
+  }catch(e){}
+  return "BET365";
 }
-async function carregarApiDireto(){
+function platformFromUrl(url){
+  try{
+    return (new URL(url,location.href).searchParams.get("plataforma")||currentPlatform()).toUpperCase();
+  }catch(e){return currentPlatform()}
+}
+function apiUrl(liga,futuro){
+  return `https://api.thtips.com.br/api/futebolvirtual?liga=${liga}&futuro=${futuro?"true":"false"}&Horas=${CONFIG.horas}&tipoOdd=&dadosAlteracao=&filtros=${encodeURIComponent(CONFIG.filtros)}&confrontos=false&hrsConfrontos=240&plataforma=${encodeURIComponent(currentPlatform())}`;
+}
+async function carregarApiDireto(opts={}){
+  if(SCANNER_COLLECTING&&opts.silent)return [];
+  SCANNER_COLLECTING=true;
   const erros=[];
-  for(const liga of CONFIG.ligas){
-    for(const futuro of [false,true]){
-      const url=apiUrl(liga,futuro);
-      try{
-        const r=await fetch(url,{credentials:"include",cache:"no-store"});
-        const txt=await r.text();
-        processApiText(url,txt);
-        if(!r.ok)erros.push(`${liga} ${futuro?"futuro":"hist"} ${r.status}`);
-      }catch(e){erros.push(`${liga} ${futuro?"futuro":"hist"} falhou`)}
+  const allRows=[];
+  try{
+    for(const liga of CONFIG.ligas){
+      for(const futuro of [false,true]){
+        const url=apiUrl(liga,futuro);
+        try{
+          const r=await fetch(url,{credentials:"include",cache:"no-store"});
+          const txt=await r.text();
+          const rows=processApiText(url,txt,{returnRows:true})||[];
+          if(rows.length)allRows.push(...rows);
+          if(!r.ok)erros.push(`${liga} ${futuro?"futuro":"hist"} ${r.status}`);
+        }catch(e){erros.push(`${liga} ${futuro?"futuro":"hist"} falhou`)}
+      }
     }
+    if(allRows.length)saveApiRows(allRows);
+  }finally{
+    SCANNER_COLLECTING=false;
   }
   loadApiRows();
   refreshResultsCache();
-  draw();
+  if(!opts.silent)draw();
   return erros;
 }
 function upcomingSetFromPage(){
@@ -1478,6 +1574,8 @@ function draw(){
 }
 draw();
 window[TIMER]=setInterval(()=>scheduleDraw(20),CONFIG.intervalMs);
+setTimeout(()=>carregarApiDireto({silent:true}).catch(()=>{}),5000);
+window.BBTIPS_SCANNER_COLLECT_TIMER=setInterval(()=>carregarApiDireto({silent:true}).catch(()=>{}),120000);
 window.BBTipsRobo={analyze,config:CONFIG,exportar:exportHistory,historico:loadStoredResults};
 })();
 

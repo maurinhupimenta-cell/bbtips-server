@@ -148,10 +148,30 @@
   <header>
     <div class="top">
       <h1>BBTips Scanner</h1>
+      <select id="platform" title="Casa de apostas">
+        <option value="BET365">Bet365</option>
+        <option value="PLAYPIX">PlayPix</option>
+        <option value="KIRON">Kiron</option>
+        <option value="SUPERBET">SuperBet</option>
+        <option value="BETANO">Betano</option>
+        <option value="SPORTINGBET">SportingBet</option>
+        <option value="BETFAIR">Betfair</option>
+        <option value="NOVIBET">Novibet</option>
+        <option value="TODAS">Todas</option>
+      </select>
       <select id="market">
-        <option value="over25">Over 2.5</option>
+        <option value="over15">Over 1.5</option>
+        <option value="under15">Under 1.5</option>
+        <option value="over25" selected>Over 2.5</option>
+        <option value="under25">Under 2.5</option>
         <option value="ambas_sim">Ambas Sim</option>
+        <option value="ambas_nao">Ambas Nao</option>
         <option value="over35">Over 3.5</option>
+        <option value="under35">Under 3.5</option>
+        <option value="over5">5+ Gols</option>
+        <option value="casa_vence">Casa Vence</option>
+        <option value="empate">Empate</option>
+        <option value="fora_vence">Visitante Vence</option>
       </select>
       <button id="refresh">Atualizar</button>
       <button id="all" class="secondary">Todas as ligas</button>
@@ -166,7 +186,7 @@
       <span id="session">deslogado</span>
       <span id="last">sem dados</span>
       <span id="count">0 linhas</span>
-      <span>deixe uma aba do BBTips aberta com a extensao coletando</span>
+      <span>dados via API do servidor e coletor da extensao</span>
     </div>
   </header>
 
@@ -176,6 +196,7 @@
       <thead>
         <tr>
           <th>Liga</th>
+          <th>Casa</th>
           <th>Horario</th>
           <th>Jogo</th>
           <th>Odd</th>

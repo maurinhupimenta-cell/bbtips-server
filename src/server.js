@@ -12,6 +12,7 @@ const port = process.env.PORT || 3000;
 const jwtSecret = process.env.JWT_SECRET || "troque-essa-chave";
 const adminUser = process.env.ADMIN_USER || "admin";
 const adminPass = process.env.ADMIN_PASS || "admin123";
+const scannerApiCache = new Map();
 
 if (!process.env.DATABASE_URL) {
   console.warn("DATABASE_URL nao definido. No Railway, adicione um Postgres ao projeto.");
@@ -32,7 +33,7 @@ app.use((req, res, next) => {
   next();
 });
 app.use(cors({ origin: true, methods: ["GET", "POST", "PATCH", "DELETE", "OPTIONS"], allowedHeaders: ["Content-Type", "Authorization"] }));
-app.use(express.json({ limit: "1mb" }));
+app.use(express.json({ limit: "5mb" }));
 app.use(express.static("public"));
 
 function tokenFor(payload) {
@@ -80,6 +81,129 @@ function endOfBrazilDay(value) {
   if (!match) return new Date(value);
   const [, y, m, d] = match;
   return new Date(`${y}-${m}-${d}T23:59:59-03:00`);
+}
+
+function scannerApiUrl(liga, futuro, platform = "BET365") {
+  const filtros = "o15,o25,u25,ambs,ambn,o35,u35,ge5,tgv5,tgc5,ftc,fte,ftv";
+  const params = new URLSearchParams({
+    liga: String(liga),
+    futuro: futuro ? "true" : "false",
+    Horas: "Horas3",
+    tipoOdd: "",
+    dadosAlteracao: "",
+    filtros,
+    confrontos: "false",
+    hrsConfrontos: "240",
+    plataforma: platform
+  });
+  return `https://api.thtips.com.br/api/futebolvirtual?${params.toString()}`;
+}
+
+function scannerScore(raw) {
+  const match = String(raw || "").match(/(\d+)\s*[-x]\s*(\d+)/i);
+  if (!match) return null;
+  const a = Number(match[1]);
+  const b = Number(match[2]);
+  return Number.isFinite(a) && Number.isFinite(b) ? { a, b, t: a + b } : null;
+}
+
+function scannerTime(row, line) {
+  const h = row.Horario ?? row.horario ?? row.Hora ?? row.hora ?? line?.Horario ?? line?.horario ?? "";
+  const min = row.Minuto ?? row.minuto;
+  if (String(h).match(/^\d{1,2}[.:]\d{2}$/)) return String(h).replace(":", ".");
+  if (h !== "" && min !== undefined) return `${Number(h)}.${String(min).padStart(2, "0")}`;
+  return String(h || "");
+}
+
+function parseScannerOdds(raw) {
+  if (!raw) return {};
+  if (typeof raw === "object") return raw;
+  try {
+    return JSON.parse(raw);
+  } catch (_error) {}
+  const out = {};
+  String(raw).split(/[;,|\n]/).forEach(part => {
+    const match = part.match(/([a-zA-Z0-9_.+]+)\s*@\s*(\d+(?:[,.]\d+)?)/);
+    if (match) out[match[1].toLowerCase()] = Number(match[2].replace(",", "."));
+  });
+  return out;
+}
+
+function collectScannerOdds(obj, out = {}) {
+  if (!obj || typeof obj !== "object") return out;
+  if (Array.isArray(obj)) {
+    obj.forEach(item => collectScannerOdds(item, out));
+    return out;
+  }
+  const key = obj.Nome ?? obj.nome ?? obj.Mercado ?? obj.mercado ?? obj.Tipo ?? obj.tipo ?? obj.Chave ?? obj.chave ?? obj.Key ?? obj.key ?? obj.Name ?? obj.name;
+  const value = obj.Odd ?? obj.odd ?? obj.Valor ?? obj.valor ?? obj.Value ?? obj.value ?? obj.Cotacao ?? obj.cotacao;
+  if (key !== undefined && value !== undefined) out[String(key).toLowerCase()] = Number(String(value).replace(",", "."));
+  ["Odds", "odds", "Odd", "odd", "Mercados", "mercados", "Markets", "markets", "Cotacoes", "cotacoes"].forEach(name => {
+    if (obj[name] !== undefined) collectScannerOdds(obj[name], out);
+  });
+  return out;
+}
+
+function flattenScannerApi(json, url, liga) {
+  const out = [];
+  const lines = Array.isArray(json?.Linhas) ? json.Linhas : Array.isArray(json?.linhas) ? json.linhas : Array.isArray(json) ? json : [];
+  lines.forEach((line, lineIndex) => {
+    const cols = Array.isArray(line.Colunas) ? line.Colunas : Array.isArray(line.colunas) ? line.colunas : Array.isArray(line.Jogos) ? line.Jogos : [line];
+    cols.forEach((col, colIndex) => {
+      if (!col || typeof col !== "object") return;
+      const score = scannerScore(col.Resultado || col.resultado || col.Placar || col.placar || "");
+      const a = col.TimeA || col.timeA || col.Casa || col.casa || col.TimeCasa || "";
+      const b = col.TimeB || col.timeB || col.Fora || col.fora || col.TimeFora || "";
+      const time = scannerTime(col, line);
+      const odds = Object.assign(
+        {},
+        parseScannerOdds(col),
+        parseScannerOdds(col.Odds || col.odds || col.Odd || col.odd || col.Mercados || col.mercados || col.Markets || col.markets),
+        collectScannerOdds(col)
+      );
+      const future = /futuro=true/i.test(url) || Boolean(col.Futuro || col.futuro || (!score && time));
+      if (!a && !b && !time) return;
+      out.push({
+        key: [url, time, a, b, score ? `${score.a}-${score.b}` : "", lineIndex, colIndex].join("|"),
+        liga,
+        time,
+        name: `${a} x ${b}`.trim(),
+        score,
+        odds,
+        future,
+        api: url,
+        idx: lineIndex * 100 + colIndex
+      });
+    });
+  });
+  return out;
+}
+
+async function fetchScannerApiRows(platform = "BET365") {
+  const now = Date.now();
+  const cacheKey = String(platform || "BET365").toUpperCase();
+  const cached = scannerApiCache.get(cacheKey);
+  if (cached && now - cached.at < 20000 && cached.rows.length) return cached;
+  const rows = [];
+  const errors = [];
+  const ligas = [1, 2, 3, 4, 5, 6];
+  await Promise.all(ligas.flatMap(liga => [false, true].map(async futuro => {
+    const url = scannerApiUrl(liga, futuro, cacheKey);
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 9000);
+      const response = await fetch(url, { signal: controller.signal });
+      clearTimeout(timer);
+      const json = await response.json();
+      if (!response.ok) errors.push(`${liga} ${futuro ? "futuro" : "hist"} ${response.status}`);
+      rows.push(...flattenScannerApi(json, url, liga).map(row => ({ ...row, platform: cacheKey })));
+    } catch (error) {
+      errors.push(`${liga} ${futuro ? "futuro" : "hist"} ${error.name || "erro"}`);
+    }
+  })));
+  const next = { at: now, rows: rows.slice(-6000), errors, platform: cacheKey };
+  scannerApiCache.set(cacheKey, next);
+  return next;
 }
 
 async function initDb() {
@@ -164,9 +288,11 @@ app.post("/api/telemetry", requireUserOrAdmin, async (req, res) => {
 });
 
 app.get("/api/scanner-data", requireUserOrAdmin, async (req, res) => {
-  const limit = Math.max(1, Math.min(120, Number(req.query.limit) || 60));
+  const limit = Math.max(1, Math.min(300, Number(req.query.limit) || 120));
   const username = req.auth.type === "admin" && req.query.user ? String(req.query.user) : req.auth.username;
-  const rows = await pool.query(`
+  const rawPlatform = String(req.query.platform || "BET365").replace(/[^a-z0-9_-]/ig, "").toUpperCase();
+  const platform = rawPlatform === "TODAS" ? "TODAS" : rawPlatform || "BET365";
+  const telemetry = await pool.query(`
     select username, payload, created_at
     from telemetry
     where kind = 'collector_rows'
@@ -174,14 +300,33 @@ app.get("/api/scanner-data", requireUserOrAdmin, async (req, res) => {
     order by id desc
     limit $2
   `, [username || null, limit]);
+  const apiData = platform === "TODAS"
+    ? { at: Date.now(), rows: [], errors: [], platform }
+    : await fetchScannerApiRows(platform);
 
   const seen = new Set();
   const out = [];
-  for (const item of rows.rows) {
+  for (const row of apiData.rows) {
+    const key = String(row.key || [
+      row.liga ?? "",
+      row.time ?? "",
+      row.name ?? "",
+      row.score ? `${row.score.a}-${row.score.b}` : "",
+      row.future ? "future" : "done",
+      row.idx ?? ""
+    ].join("|"));
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({ ...row, source: "api" });
+  }
+  for (const item of telemetry.rows) {
     const payload = item.payload || {};
     const payloadRows = Array.isArray(payload.rows) ? payload.rows : [];
+    const payloadPlatform = String(payload.platform || "").toUpperCase();
     for (const row of payloadRows) {
       if (!row || typeof row !== "object") continue;
+      const rowPlatform = String(row.platform || payloadPlatform || "").toUpperCase();
+      if (platform !== "TODAS" && rowPlatform && rowPlatform !== platform) continue;
       const key = String(row.key || [
         row.liga ?? "",
         row.time ?? "",
@@ -194,6 +339,8 @@ app.get("/api/scanner-data", requireUserOrAdmin, async (req, res) => {
       seen.add(key);
       out.push({
         ...row,
+        platform: rowPlatform || null,
+        source: "collector",
         collectedAt: item.created_at,
         username: item.username
       });
@@ -205,9 +352,12 @@ app.get("/api/scanner-data", requireUserOrAdmin, async (req, res) => {
   res.json({
     ok: true,
     username,
+    platform,
     count: out.length,
     rows: out,
-    lastEventAt: rows.rows[0]?.created_at || null
+    lastEventAt: telemetry.rows[0]?.created_at || null,
+    apiFetchedAt: new Date(apiData.at).toISOString(),
+    apiErrors: apiData.errors
   });
 });
 
