@@ -272,7 +272,23 @@ function sendAgenteLocal(rows){
   try{
     window.postMessage({type:"BBTIPS_AGENT_ROWS",source:"bbtips_extension",sentAt:now,rows:rows.slice(-250)},"*");
   }catch(e){}
-
+  try{
+    const cfg=window.__BBTIPS_REMOTE_CONFIG||{};
+    if(!cfg.apiBase||!cfg.token)return;
+    fetch(`${cfg.apiBase}/api/telemetry`,{
+      method:"POST",
+      keepalive:true,
+      headers:{"Content-Type":"application/json","Authorization":`Bearer ${cfg.token}`},
+      body:JSON.stringify({
+        kind:"collector_rows",
+        sentAt:new Date(now).toISOString(),
+        url:location.href,
+        liga:activeLiga(),
+        market:CONFIG.market,
+        rows:rows.slice(-250)
+      })
+    }).catch(()=>{});
+  }catch(e){}
 }
 function sendResultadosAgenteLocal(){
   try{
@@ -1408,6 +1424,7 @@ function draw(){
   const isMin=P.classList.contains("min");
   loadApiRowsLight();
   refreshResultsCacheLight(isMin?false:false);
+  sendResultadosAgenteLocal();
   if(isMin){
     const ligaAtual=activeLiga();
     P.innerHTML=`<div class="top"><b>BBTips Robo | ${new Date().toLocaleTimeString()} | Liga ${ligaAtual||"auto"} | Mercado ${esc(market().name)} | API ${API_ROWS.length} | Resultados ${RESULTS_CACHE.length} | modo leve</b>
@@ -1418,7 +1435,6 @@ function draw(){
     window.scrollTo(oldPageX,oldPageY);
     return;
   }
-  sendResultadosAgenteLocal();
   const a=analyze();
   notify(a.signals);
   notifyFundo(a.series);

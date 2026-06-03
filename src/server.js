@@ -126,6 +126,10 @@ app.get("/api/health", (_req, res) => {
   res.json({ ok: true, name: "bbtips-server" });
 });
 
+app.get("/scanner", (_req, res) => {
+  res.sendFile(path.join(process.cwd(), "public", "scanner.html"));
+});
+
 app.get("/api/robo.js", async (req, res) => {
   const token = req.query.token || req.headers.authorization?.replace(/^Bearer\s+/i, "");
   const payload = readToken(String(token || ""));
@@ -157,6 +161,54 @@ app.post("/api/telemetry", requireUserOrAdmin, async (req, res) => {
     [req.auth.username || "admin", payload.kind || "robo", payload]
   );
   res.json({ ok: true });
+});
+
+app.get("/api/scanner-data", requireUserOrAdmin, async (req, res) => {
+  const limit = Math.max(1, Math.min(120, Number(req.query.limit) || 60));
+  const username = req.auth.type === "admin" && req.query.user ? String(req.query.user) : req.auth.username;
+  const rows = await pool.query(`
+    select username, payload, created_at
+    from telemetry
+    where kind = 'collector_rows'
+      and ($1::text is null or username = $1)
+    order by id desc
+    limit $2
+  `, [username || null, limit]);
+
+  const seen = new Set();
+  const out = [];
+  for (const item of rows.rows) {
+    const payload = item.payload || {};
+    const payloadRows = Array.isArray(payload.rows) ? payload.rows : [];
+    for (const row of payloadRows) {
+      if (!row || typeof row !== "object") continue;
+      const key = String(row.key || [
+        row.liga ?? "",
+        row.time ?? "",
+        row.name ?? "",
+        row.score ? `${row.score.a}-${row.score.b}` : "",
+        row.future ? "future" : "done",
+        row.idx ?? ""
+      ].join("|"));
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push({
+        ...row,
+        collectedAt: item.created_at,
+        username: item.username
+      });
+      if (out.length >= 5000) break;
+    }
+    if (out.length >= 5000) break;
+  }
+
+  res.json({
+    ok: true,
+    username,
+    count: out.length,
+    rows: out,
+    lastEventAt: rows.rows[0]?.created_at || null
+  });
 });
 
 app.get("/api/admin/telemetry", requireAdmin, async (req, res) => {
@@ -244,6 +296,21 @@ app.post("/api/login", async (req, res) => {
     token: tokenFor({ type: "user", username }),
     user: { username: user.username, expiresAt: user.expires_at }
   });
+});
+
+app.post("/api/check", async (req, res) => {
+  const token = req.body?.token || req.headers.authorization?.replace(/^Bearer\s+/i, "");
+  const payload = readToken(String(token || ""));
+  if (!payload || !["user", "admin"].includes(payload.type)) {
+    return res.status(401).json({ ok: false, active: false, error: "token invalido" });
+  }
+  if (payload.type === "admin") {
+    return res.json({ ok: true, active: true, username: payload.username, type: "admin" });
+  }
+  const found = await pool.query("select username, active, expires_at from users where username=$1", [payload.username]);
+  const user = found.rows[0];
+  const active = Boolean(user?.active) && (!user.expires_at || endOfBrazilDay(user.expires_at).getTime() >= Date.now());
+  res.json({ ok: true, active, username: payload.username, type: "user" });
 });
 
 initDb()
