@@ -13,7 +13,6 @@ const jwtSecret = process.env.JWT_SECRET || "troque-essa-chave";
 const adminUser = process.env.ADMIN_USER || "admin";
 const adminPass = process.env.ADMIN_PASS || "admin123";
 const scannerApiCache = new Map();
-const scannerFutureTtlMs = Number(process.env.SCANNER_FUTURE_TTL_MS) || 90000;
 
 if (!process.env.DATABASE_URL) {
   console.warn("DATABASE_URL nao definido. No Railway, adicione um Postgres ao projeto.");
@@ -368,10 +367,7 @@ app.get("/api/scanner-data", requireUserOrAdmin, async (req, res) => {
   const activeHours = recentHours;
   const finalApiData = apiData || await fetchScannerApiRows(platform, activeHours);
   const latestFutureMsByLiga = new Map();
-  const requestNow = Date.now();
   for (const item of telemetry.rows) {
-    const itemMs = new Date(item.created_at).getTime();
-    if (!Number.isFinite(itemMs) || requestNow - itemMs > scannerFutureTtlMs) continue;
     const payload = item.payload || {};
     const payloadRows = Array.isArray(payload.rows) ? payload.rows : [];
     const payloadPlatform = String(payload.platform || "").toUpperCase();
@@ -400,7 +396,7 @@ app.get("/api/scanner-data", requireUserOrAdmin, async (req, res) => {
       if (rowHours !== activeHours) continue;
       const resolvedLiga = Number(row.liga) || payloadLiga;
       if (!resolvedLiga || latestFutureMsByLiga.has(resolvedLiga)) continue;
-      latestFutureMsByLiga.set(resolvedLiga, itemMs);
+      latestFutureMsByLiga.set(resolvedLiga, new Date(item.created_at).getTime());
     }
   }
 
@@ -416,7 +412,6 @@ app.get("/api/scanner-data", requireUserOrAdmin, async (req, res) => {
     out.push({ ...row, source: "api" });
   }
   for (const item of telemetry.rows) {
-    const itemMs = new Date(item.created_at).getTime();
     const payload = item.payload || {};
     const payloadRows = Array.isArray(payload.rows) ? payload.rows : [];
     const payloadPlatform = String(payload.platform || "").toUpperCase();
@@ -446,10 +441,9 @@ app.get("/api/scanner-data", requireUserOrAdmin, async (req, res) => {
       const resolvedLiga = Number(row.liga) || (!row.score && row.future ? payloadLiga : null);
       if (!resolvedLiga) continue;
       if (row.future && !row.score) {
-        if (!Number.isFinite(itemMs) || requestNow - itemMs > scannerFutureTtlMs) continue;
         if (!scannerVisibleFutureSource(row)) continue;
         const latestFutureMs = latestFutureMsByLiga.get(resolvedLiga);
-        if (!latestFutureMs || itemMs !== latestFutureMs) continue;
+        if (!latestFutureMs || new Date(item.created_at).getTime() !== latestFutureMs) continue;
       }
       const key = scannerCanonicalKey(row, resolvedLiga, rowPlatform);
       if (seen.has(key)) continue;
