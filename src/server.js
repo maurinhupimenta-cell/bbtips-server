@@ -83,12 +83,27 @@ function endOfBrazilDay(value) {
   return new Date(`${y}-${m}-${d}T23:59:59-03:00`);
 }
 
-function scannerApiUrl(liga, futuro, platform = "BET365") {
+function normalizeScannerHours(value) {
+  const match = String(value || "").match(/(?:Horas)?\s*(\d+)/i);
+  if (!match) return null;
+  const n = Number(match[1]);
+  return Number.isFinite(n) && n > 0 ? `Horas${n}` : null;
+}
+
+function scannerHoursFromUrl(url) {
+  try {
+    return normalizeScannerHours(new URL(url).searchParams.get("Horas"));
+  } catch (_error) {
+    return null;
+  }
+}
+
+function scannerApiUrl(liga, futuro, platform = "BET365", hours = "Horas3") {
   const filtros = "o15,o25,u25,ambs,ambn,o35,u35,ge5,tgv5,tgc5,ftc,fte,ftv";
   const params = new URLSearchParams({
     liga: String(liga),
     futuro: futuro ? "true" : "false",
-    Horas: "Horas3",
+    Horas: normalizeScannerHours(hours) || "Horas3",
     tipoOdd: "",
     dadosAlteracao: "",
     filtros,
@@ -190,6 +205,7 @@ function flattenScannerApi(json, url, liga) {
         score,
         odds,
         future,
+        hours: scannerHoursFromUrl(url) || "Horas3",
         api: url,
         idx: lineIndex * 100 + colIndex
       });
@@ -198,16 +214,17 @@ function flattenScannerApi(json, url, liga) {
   return out;
 }
 
-async function fetchScannerApiRows(platform = "BET365") {
+async function fetchScannerApiRows(platform = "BET365", hours = "Horas3") {
   const now = Date.now();
   const cacheKey = String(platform || "BET365").toUpperCase();
-  const cached = scannerApiCache.get(cacheKey);
+  const hoursKey = normalizeScannerHours(hours) || "Horas3";
+  const cached = scannerApiCache.get(`${cacheKey}|${hoursKey}`);
   if (cached && now - cached.at < 20000 && cached.rows.length) return cached;
   const rows = [];
   const errors = [];
   const ligas = [1, 2, 3, 4, 5, 6];
   await Promise.all(ligas.flatMap(liga => [false, true].map(async futuro => {
-    const url = scannerApiUrl(liga, futuro, cacheKey);
+    const url = scannerApiUrl(liga, futuro, cacheKey, hoursKey);
     try {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), 9000);
@@ -220,8 +237,8 @@ async function fetchScannerApiRows(platform = "BET365") {
       errors.push(`${liga} ${futuro ? "futuro" : "hist"} ${error.name || "erro"}`);
     }
   })));
-  const next = { at: now, rows: rows.slice(-6000), errors, platform: cacheKey };
-  scannerApiCache.set(cacheKey, next);
+  const next = { at: now, rows: rows.slice(-6000), errors, platform: cacheKey, hours: hoursKey };
+  scannerApiCache.set(`${cacheKey}|${hoursKey}`, next);
   return next;
 }
 
@@ -311,6 +328,7 @@ app.get("/api/scanner-data", requireUserOrAdmin, async (req, res) => {
   const username = req.auth.type === "admin" && req.query.user ? String(req.query.user) : req.auth.username;
   const rawPlatform = String(req.query.platform || "BET365").replace(/[^a-z0-9_-]/ig, "").toUpperCase();
   const platform = rawPlatform === "TODAS" ? "TODAS" : rawPlatform || "BET365";
+  const requestedHours = normalizeScannerHours(req.query.hours);
   let telemetry = await pool.query(`
     select username, payload, created_at
     from telemetry
@@ -331,12 +349,24 @@ app.get("/api/scanner-data", requireUserOrAdmin, async (req, res) => {
     telemetryScope = telemetry.rows.length ? "ultima_coleta" : "vazio";
   }
   const apiData = platform === "TODAS"
-    ? { at: Date.now(), rows: [], errors: [], platform }
-    : await fetchScannerApiRows(platform);
+    ? { at: Date.now(), rows: [], errors: [], platform, hours: requestedHours || "Horas3" }
+    : null;
+
+  const recentHours = requestedHours || telemetry.rows
+    .map(item => normalizeScannerHours(item.payload?.hours))
+    .find(Boolean) || telemetry.rows
+    .flatMap(item => Array.isArray(item.payload?.rows) ? item.payload.rows : [])
+    .map(row => normalizeScannerHours(row?.hours))
+    .find(Boolean) || "Horas3";
+
+  const activeHours = recentHours;
+  const finalApiData = apiData || await fetchScannerApiRows(platform, activeHours);
 
   const seen = new Set();
   const out = [];
-  for (const row of apiData.rows) {
+  for (const row of finalApiData.rows) {
+    const rowHours = normalizeScannerHours(row.hours) || activeHours;
+    if (rowHours !== activeHours) continue;
     const key = scannerCanonicalKey(row, row.liga, row.platform);
     if (seen.has(key)) continue;
     seen.add(key);
@@ -346,6 +376,8 @@ app.get("/api/scanner-data", requireUserOrAdmin, async (req, res) => {
     const payload = item.payload || {};
     const payloadRows = Array.isArray(payload.rows) ? payload.rows : [];
     const payloadPlatform = String(payload.platform || "").toUpperCase();
+    const payloadHours = normalizeScannerHours(payload.hours) || null;
+    if (payloadHours && payloadHours !== activeHours) continue;
     const ligaCounts = new Map();
     for (const payloadRow of payloadRows) {
       const ligaValue = Number(payloadRow?.liga);
@@ -360,6 +392,8 @@ app.get("/api/scanner-data", requireUserOrAdmin, async (req, res) => {
       if (String(row.api || "") === "result-cache") continue;
       const rowPlatform = String(row.platform || payloadPlatform || "").toUpperCase();
       if (platform !== "TODAS" && rowPlatform && rowPlatform !== platform) continue;
+      const rowHours = normalizeScannerHours(row.hours) || payloadHours || activeHours;
+      if (rowHours !== activeHours) continue;
       const resolvedLiga = Number(row.liga) || (!row.score && row.future ? payloadLiga : null);
       if (!resolvedLiga) continue;
       const key = scannerCanonicalKey(row, resolvedLiga, rowPlatform);
@@ -369,6 +403,7 @@ app.get("/api/scanner-data", requireUserOrAdmin, async (req, res) => {
         ...row,
         liga: resolvedLiga,
         platform: rowPlatform || null,
+        hours: rowHours,
         source: "collector",
         collectedAt: item.created_at,
         username: item.username
@@ -386,8 +421,9 @@ app.get("/api/scanner-data", requireUserOrAdmin, async (req, res) => {
     rows: out,
     lastEventAt: telemetry.rows[0]?.created_at || null,
     telemetryScope,
-    apiFetchedAt: new Date(apiData.at).toISOString(),
-    apiErrors: apiData.errors
+    hours: activeHours,
+    apiFetchedAt: new Date(finalApiData.at).toISOString(),
+    apiErrors: finalApiData.errors
   });
 });
 

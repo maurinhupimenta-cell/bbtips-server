@@ -464,7 +464,7 @@ async function loadData() {
   const apiText = data.apiFetchedAt ? `api: ${new Date(data.apiFetchedAt).toLocaleTimeString()}` : "api sem dados";
   const scopeText = data.telemetryScope === "ultima_coleta" ? "geral" : "usuario";
   const collectorText = data.lastEventAt ? `coletor ${scopeText}: ${new Date(data.lastEventAt).toLocaleTimeString()}` : "coletor sem envio";
-  els.count.textContent = `${data.count || state.rows.length} linhas | ${data.platform || platform}${errorText}`;
+  els.count.textContent = `${data.count || state.rows.length} linhas | ${data.platform || platform} | ${data.hours || "Horas?"}${errorText}`;
   els.last.textContent = `${apiText} | ${collectorText}`;
   render();
 }

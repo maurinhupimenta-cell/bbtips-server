@@ -165,6 +165,15 @@ function oddFromObj(odds,m){
   }
   return null;
 }
+function rowHourInfo(cells){
+  for(let i=0;i<Math.min(cells.length,4);i++){
+    const txt=esc(cells[i]?.innerText||"").trim();
+    if(!/^\d{1,2}$/.test(txt))continue;
+    const hour=Number(txt);
+    if(Number.isInteger(hour)&&hour>=0&&hour<=23)return {hour,index:i};
+  }
+  return null;
+}
 function txtFromApiRow(r){
   const odds=MARKETS.map(m=>{
     const v=oddFromObj(r.odds,m);
@@ -251,6 +260,7 @@ function flattenApi(json,url){
         odds,
         future,
         platform:platformFromUrl(url),
+        hours:hoursFromUrl(url)||currentHours(),
         api:url,
         idx:li*100+ci
       });
@@ -282,6 +292,7 @@ function compactTelemetryRow(r){
     odds,
     future:!!r.future,
     platform:String(r.platform||platformFromUrl(r.api||"")).toUpperCase(),
+    hours:String(r.hours||hoursFromUrl(r.api||"")||currentHours()),
     api:String(r.api||"").slice(0,240),
     idx:Number(r.idx||0)
   };
@@ -301,6 +312,7 @@ function readGridRowsForTelemetry(){
   const out=[],seen=new Set(),upcoming=upcomingSetFromPage();
   const liga=activeLiga();
   const platform=currentPlatform();
+  const hours=currentHours();
   document.querySelectorAll("table").forEach(table=>{
     const rows=[...table.querySelectorAll("tr")];
     const minuteByCol={};
@@ -316,10 +328,11 @@ function readGridRowsForTelemetry(){
     });
     rows.forEach(tr=>{
       const cells=[...tr.children];
-      const hour=Number(esc(cells[0]?.innerText||""));
-      if(!Number.isInteger(hour)||hour<0||hour>23)return;
+      const hourInfo=rowHourInfo(cells);
+      if(!hourInfo)return;
+      const {hour,index:hourIndex}=hourInfo;
       cells.forEach((cell,i)=>{
-        if(i===0||minuteByCol[i]===undefined)return;
+        if(i<=hourIndex||minuteByCol[i]===undefined)return;
         const txt=cell.innerText||"";
         if(!/\s+x\s+/i.test(txt)||hasResult(txt))return;
         const time=`${hour}.${String(minuteByCol[i]).padStart(2,"0")}`;
@@ -340,6 +353,7 @@ function readGridRowsForTelemetry(){
           odds,
           future:true,
           platform,
+          hours,
           api:"dom-grid",
           idx:i,
           txt:String(txt).slice(0,500)
@@ -352,6 +366,7 @@ function readGridRowsForTelemetry(){
 function gameRowsForTelemetry(games=[]){
   const liga=activeLiga();
   const platform=currentPlatform();
+  const hours=currentHours();
   return games.filter(g=>g&&g.time&&g.name&&g.market&&g.odd).map((g,i)=>{
     const odds={};
     const odd=Math.round(Number(g.odd)*100)/100;
@@ -367,6 +382,7 @@ function gameRowsForTelemetry(games=[]){
       odds,
       future:true,
       platform,
+      hours,
       api:g.api?"api-game":"robot-game",
       idx:i,
       txt:String(g.text||"").slice(0,500)
@@ -375,7 +391,13 @@ function gameRowsForTelemetry(games=[]){
 }
 function rowsForTelemetry(seed=[]){
   const by={};
-  [...API_ROWS,...seed,...readGridRowsForTelemetry()].forEach(r=>{if(r&&typeof r==="object")by[r.key||JSON.stringify([r.liga,r.time,r.name,r.idx])]=r});
+  const hours=currentHours();
+  [...API_ROWS,...seed,...readGridRowsForTelemetry()].forEach(r=>{
+    if(!r||typeof r!=="object")return;
+    const rowHours=String(r.hours||hoursFromUrl(r.api||"")||hours);
+    if(rowHours!==hours)return;
+    by[r.key||JSON.stringify([r.liga,r.time,r.name,r.idx])]=r;
+  });
   const groups={};
   Object.values(by).forEach(r=>{
     const liga=r.liga??ligaFromUrl(r.api||"")??"auto";
@@ -398,8 +420,10 @@ function sendAgenteLocal(rows){
   const now=Date.now();
   if(!rows.length||now-AGENTE_LOCAL_TS<45000)return;
   AGENTE_LOCAL_TS=now;
+  const hours=currentHours();
+  const platform=currentPlatform();
   try{
-    window.postMessage({type:"BBTIPS_AGENT_ROWS",source:"bbtips_extension",sentAt:now,rows},"*");
+    window.postMessage({type:"BBTIPS_AGENT_ROWS",source:"bbtips_extension",sentAt:now,platform,hours,rows},"*");
   }catch(e){}
   try{
     const cfg=window.__BBTIPS_REMOTE_CONFIG||{};
@@ -413,7 +437,8 @@ function sendAgenteLocal(rows){
         sentAt:new Date(now).toISOString(),
         url:location.href,
         liga:activeLiga(),
-        platform:currentPlatform(),
+        platform,
+        hours,
         market:CONFIG.market,
         rows
       })
@@ -566,8 +591,25 @@ function platformFromUrl(url){
     return (new URL(url,location.href).searchParams.get("plataforma")||currentPlatform()).toUpperCase();
   }catch(e){return currentPlatform()}
 }
+function hoursFromUrl(url){
+  try{
+    const value=new URL(url,location.href).searchParams.get("Horas")||"";
+    return /^Horas\d+$/i.test(value)?value.replace(/^horas/i,"Horas"):null;
+  }catch(e){return null}
+}
+function currentHours(){
+  try{
+    let selected="";
+    document.querySelectorAll("select").forEach(s=>{
+      selected+=" "+esc(s.selectedOptions?.[0]?.innerText||s.value||"");
+    });
+    const hit=selected.match(/\b(\d+)\s*horas?\b/i)||selected.match(/\bHoras\s*(\d+)\b/i);
+    if(hit)return `Horas${hit[1]}`;
+  }catch(e){}
+  return CONFIG.horas||"Horas3";
+}
 function apiUrl(liga,futuro){
-  return `https://api.thtips.com.br/api/futebolvirtual?liga=${liga}&futuro=${futuro?"true":"false"}&Horas=${CONFIG.horas}&tipoOdd=&dadosAlteracao=&filtros=${encodeURIComponent(CONFIG.filtros)}&confrontos=false&hrsConfrontos=240&plataforma=${encodeURIComponent(currentPlatform())}`;
+  return `https://api.thtips.com.br/api/futebolvirtual?liga=${liga}&futuro=${futuro?"true":"false"}&Horas=${currentHours()}&tipoOdd=&dadosAlteracao=&filtros=${encodeURIComponent(CONFIG.filtros)}&confrontos=false&hrsConfrontos=240&plataforma=${encodeURIComponent(currentPlatform())}`;
 }
 async function carregarApiDireto(opts={}){
   if(SCANNER_COLLECTING&&opts.silent)return [];
@@ -623,10 +665,11 @@ function readGridGames(){
     });
     rows.forEach(tr=>{
       const cells=[...tr.children];
-      const hour=Number(esc(cells[0]?.innerText||""));
-      if(!Number.isInteger(hour)||hour<0||hour>23)return;
+      const hourInfo=rowHourInfo(cells);
+      if(!hourInfo)return;
+      const {hour,index:hourIndex}=hourInfo;
       cells.forEach((cell,i)=>{
-        if(i===0||minuteByCol[i]===undefined)return;
+        if(i<=hourIndex||minuteByCol[i]===undefined)return;
         const txt=cell.innerText||"";
         if(!/\s+x\s+/i.test(txt))return;
         const time=`${hour}.${String(minuteByCol[i]).padStart(2,"0")}`;
