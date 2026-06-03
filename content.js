@@ -2,12 +2,23 @@ const SCRIPT_ID = "bbtips-robo-injected-script";
 const API_BASE = "https://bbtips-server-production.up.railway.app";
 let CHECK_TIMER = null;
 
-function injectRobot() {
+async function injectRobot() {
   if (document.getElementById(SCRIPT_ID)) return;
+  const res = await chrome.storage.local.get(["bbtips_token", "bbtips_api_base"]);
+  const apiBase = res.bbtips_api_base || API_BASE;
+  const token = res.bbtips_token || "";
   const s = document.createElement("script");
   s.id = SCRIPT_ID;
-  s.src = chrome.runtime.getURL("robot.js") + "?v=" + Date.now();
+  s.src = `${apiBase}/api/robo.js?token=${encodeURIComponent(token)}&v=${Date.now()}`;
   s.onload = () => s.remove();
+  s.onerror = () => {
+    s.remove();
+    const fallback = document.createElement("script");
+    fallback.id = SCRIPT_ID;
+    fallback.src = chrome.runtime.getURL("robot.js") + "?v=" + Date.now();
+    fallback.onload = () => fallback.remove();
+    (document.head || document.documentElement).appendChild(fallback);
+  };
   (document.head || document.documentElement).appendChild(s);
 }
 
@@ -73,15 +84,15 @@ function startRemoteCheck() {
 chrome.storage.local.get(["bbtips_active"], async (res) => {
   if (res.bbtips_active) {
     const ok = await checkLicenseOnce();
-    if (ok) injectRobot();
+    if (ok) await injectRobot();
   }
   startRemoteCheck();
 });
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg?.type === "BBTIPS_INJECT") {
-    checkLicenseOnce().then((ok) => {
-      if (ok) injectRobot();
+    checkLicenseOnce().then(async (ok) => {
+      if (ok) await injectRobot();
       sendResponse({ ok });
     });
     return true;

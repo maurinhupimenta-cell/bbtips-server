@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "BBTips Robô",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "Injeta o robô BBTips somente após ativação da licença.",
   "permissions": ["storage", "activeTab", "scripting"],
   "host_permissions": [
@@ -10,7 +10,8 @@
     "*://*.bbtips.com/*",
     "*://bbtips.com/*",
     "*://*.thtips.com.br/*",
-    "*://thtips.com.br/*"
+    "*://thtips.com.br/*",
+    "https://bbtips-server-production.up.railway.app/*"
   ],
   "action": {
     "default_title": "BBTips Robô",
