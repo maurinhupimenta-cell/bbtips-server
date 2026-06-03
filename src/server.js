@@ -361,6 +361,26 @@ app.get("/api/scanner-data", requireUserOrAdmin, async (req, res) => {
 
   const activeHours = recentHours;
   const finalApiData = apiData || await fetchScannerApiRows(platform, activeHours);
+  let latestFutureAt = null;
+  for (const item of telemetry.rows) {
+    const payload = item.payload || {};
+    const payloadRows = Array.isArray(payload.rows) ? payload.rows : [];
+    const payloadPlatform = String(payload.platform || "").toUpperCase();
+    const payloadHours = normalizeScannerHours(payload.hours) || null;
+    if (payloadHours && payloadHours !== activeHours) continue;
+    const hasMatchingFuture = payloadRows.some(row => {
+      if (!row || typeof row !== "object" || row.score || !row.future) return false;
+      const rowPlatform = String(row.platform || payloadPlatform || "").toUpperCase();
+      const rawRowHours = normalizeScannerHours(row.hours);
+      const rowHours = rawRowHours || payloadHours || (requestedHours ? null : activeHours);
+      if (platform !== "TODAS" && rowPlatform && rowPlatform !== platform) return false;
+      return rowHours === activeHours;
+    });
+    if (hasMatchingFuture) {
+      latestFutureAt = item.created_at;
+      break;
+    }
+  }
 
   const seen = new Set();
   const out = [];
@@ -392,8 +412,10 @@ app.get("/api/scanner-data", requireUserOrAdmin, async (req, res) => {
       if (String(row.api || "") === "result-cache") continue;
       const rowPlatform = String(row.platform || payloadPlatform || "").toUpperCase();
       if (platform !== "TODAS" && rowPlatform && rowPlatform !== platform) continue;
-      const rowHours = normalizeScannerHours(row.hours) || payloadHours || activeHours;
-      if (rowHours !== activeHours) continue;
+      const rawRowHours = normalizeScannerHours(row.hours);
+      const rowHours = rawRowHours || payloadHours || (requestedHours ? null : activeHours);
+      if (!rowHours || rowHours !== activeHours) continue;
+      if (row.future && !row.score && latestFutureAt && item.created_at !== latestFutureAt) continue;
       const resolvedLiga = Number(row.liga) || (!row.score && row.future ? payloadLiga : null);
       if (!resolvedLiga) continue;
       const key = scannerCanonicalKey(row, resolvedLiga, rowPlatform);
