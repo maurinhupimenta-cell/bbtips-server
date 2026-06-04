@@ -185,7 +185,7 @@ function scannerCanonicalKey(row, liga, platform) {
 
 function scannerVisibleFutureSource(row) {
   const api = String(row?.api || "");
-  return api === "dom-grid" || api === "robot-game" || /futebolvirtual/i.test(api);
+  return api === "dom-grid" || api === "robot-game";
 }
 
 function parseScannerOdds(raw) {

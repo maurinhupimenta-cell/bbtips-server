@@ -444,7 +444,7 @@ function gameRowsForTelemetry(games=[]){
 function isVisibleFutureRow(r){
   if(!r||!r.future||r.score)return false;
   const api=String(r.api||"");
-  return api==="dom-grid"||api==="robot-game"||/futebolvirtual/i.test(api);
+  return api==="dom-grid"||api==="robot-game";
 }
 function rowsForTelemetry(seed=[]){
   const by={};
@@ -734,8 +734,7 @@ function upcomingSetFromPage(){
   return set;
 }
 function readGridGames(){
-  const games=[],apiGames=[],seen=new Set(),upcoming=upcomingSetFromPage();
-  const liga=activeLiga();
+  const games=[],seen=new Set(),upcoming=upcomingSetFromPage();
   document.querySelectorAll("table").forEach(table=>{
     const rows=[...table.querySelectorAll("tr")];
     const minuteByCol=fillMinuteByCol(rows);
@@ -765,19 +764,7 @@ function readGridGames(){
     });
   });
   if(games.length)return games.sort((a,b)=>(parseTime(a.time)??9999)-(parseTime(b.time)??9999)).slice(0,CONFIG.maxProximos);
-  API_ROWS.filter(r=>r.future&&!r.score&&(!liga||!r.liga||r.liga===liga)).forEach(r=>{
-    if(upcoming.size&&r.time&&!upcoming.has(String(r.time).replace(":",".")))return;
-    if(r.time&&!isFuture(r.time))return;
-    activeMarkets().forEach(m=>{
-      const odd=oddFromObj(r.odds,m);
-      if(!odd)return;
-      const key=`${r.time}|${r.name}|${m.key}|${odd}`;
-      if(seen.has(key))return;
-      seen.add(key);
-      apiGames.push({time:r.time,name:r.name,market:m,odd,text:txtFromApiRow(r),api:true});
-    });
-  });
-  return apiGames.sort((a,b)=>(parseTime(a.time)??9999)-(parseTime(b.time)??9999)).slice(0,CONFIG.maxProximos);
+  return [];
 }
 function numericArray(v){
   if(!Array.isArray(v)||v.length<25)return null;
@@ -1366,6 +1353,7 @@ function nextGamesForLiga(liga,m,limit=2){
   const seen=new Set();
   return API_ROWS
     .filter(r=>r&&r.future&&!r.score&&r.liga===liga)
+    .filter(r=>isVisibleFutureRow(r))
     .filter(r=>!r.time||isFuture(r.time))
     .map(r=>({time:r.time,name:r.name,odd:oddFromObj(r.odds,m),market:m,text:txtFromApiRow(r),liga}))
     .filter(g=>Number.isFinite(g.odd)&&g.odd>1)

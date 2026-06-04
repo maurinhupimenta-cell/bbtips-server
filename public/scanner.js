@@ -231,6 +231,12 @@ function uniqueRows(rows) {
   return out;
 }
 
+function isScreenFutureRow(row) {
+  if (!row || !row.future || row.score) return false;
+  const api = String(row.api || "");
+  return api === "dom-grid" || api === "robot-game";
+}
+
 function historyRows(liga, market) {
   return uniqueRows(state.rows)
     .filter(row => Number(row.liga) === Number(liga) && row.score && market.pays(row.score) !== null && !row.future)
@@ -239,7 +245,7 @@ function historyRows(liga, market) {
 
 function upcomingRows(liga, market) {
   return uniqueRows(state.rows)
-    .filter(row => Number(row.liga) === Number(liga) && row.future && !row.score && (row.name || row.time) && isFutureTime(row.time))
+    .filter(row => Number(row.liga) === Number(liga) && isScreenFutureRow(row) && (row.name || row.time) && isFutureTime(row.time))
     .sort((a, b) => futureDistance(a) - futureDistance(b))
     .slice(0, 6);
 }
@@ -423,7 +429,7 @@ function render() {
         <td>${lineText}</td>
       </tr>
     `;
-  }).join("") : `<tr><td colspan="9" class="muted">Sem jogos carregados ainda. Clique Atualizar; se continuar vazio, a API desta casa/mercado nao retornou dados agora.</td></tr>`;
+  }).join("") : `<tr><td colspan="9" class="muted">Sem jogos visiveis coletados. Abra a grade do BBTips com o robo ligado, clique API/Atualizar e recarregue este scanner.</td></tr>`;
 }
 
 async function login() {
