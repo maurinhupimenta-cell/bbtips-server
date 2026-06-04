@@ -14,6 +14,7 @@ const adminUser = process.env.ADMIN_USER || "admin";
 const adminPass = process.env.ADMIN_PASS || "admin123";
 const scannerApiCache = new Map();
 const scannerScheduleTimeZone = "Europe/London";
+const scannerPlatforms = ["BET365", "PLAYPIX", "KIRON", "SUPERBET", "BETANO", "SPORTINGBET", "BETFAIR", "NOVIBET"];
 
 if (!process.env.DATABASE_URL) {
   console.warn("DATABASE_URL nao definido. No Railway, adicione um Postgres ao projeto.");
@@ -281,6 +282,27 @@ async function fetchScannerApiRows(platform = "BET365", hours = "Horas3") {
   return next;
 }
 
+async function fetchScannerApiRowsForPlatform(platform, hours) {
+  return fetchScannerApiRows(platform, hours);
+}
+
+async function fetchAllScannerApiRows(hours = "Horas3") {
+  const chunks = await Promise.all(scannerPlatforms.map(platform => fetchScannerApiRowsForPlatform(platform, hours)));
+  const rows = [];
+  const errors = [];
+  for (const chunk of chunks) {
+    rows.push(...chunk.rows);
+    errors.push(...chunk.errors.map(error => `${chunk.platform}: ${error}`));
+  }
+  return {
+    at: Date.now(),
+    rows: rows.slice(-12000),
+    errors,
+    platform: "TODAS",
+    hours: normalizeScannerHours(hours) || "Horas3"
+  };
+}
+
 async function initDb() {
   await pool.query(`
     create table if not exists admins (
@@ -387,10 +409,6 @@ app.get("/api/scanner-data", requireUserOrAdmin, async (req, res) => {
     `, [limit]);
     telemetryScope = telemetry.rows.length ? "ultima_coleta" : "vazio";
   }
-  const apiData = platform === "TODAS"
-    ? { at: Date.now(), rows: [], errors: [], platform, hours: requestedHours || "Horas3" }
-    : null;
-
   const recentHours = requestedHours || telemetry.rows
     .map(item => normalizeScannerHours(item.payload?.hours))
     .find(Boolean) || telemetry.rows
@@ -399,7 +417,9 @@ app.get("/api/scanner-data", requireUserOrAdmin, async (req, res) => {
     .find(Boolean) || "Horas3";
 
   const activeHours = recentHours;
-  const finalApiData = apiData || await fetchScannerApiRows(platform, activeHours);
+  const finalApiData = platform === "TODAS"
+    ? await fetchAllScannerApiRows(activeHours)
+    : await fetchScannerApiRows(platform, activeHours);
   const latestFutureMsByLiga = new Map();
   for (const item of telemetry.rows) {
     const payload = item.payload || {};
@@ -440,7 +460,7 @@ app.get("/api/scanner-data", requireUserOrAdmin, async (req, res) => {
   for (const row of finalApiData.rows) {
     const rowHours = normalizeScannerHours(row.hours) || activeHours;
     if (rowHours !== activeHours) continue;
-    if (row.future && !row.score) continue;
+    if (row.future && !row.score && !scannerIsFutureTime(row.time)) continue;
     const key = scannerCanonicalKey(row, row.liga, row.platform);
     if (seen.has(key)) continue;
     seen.add(key);

@@ -231,10 +231,10 @@ function uniqueRows(rows) {
   return out;
 }
 
-function isScreenFutureRow(row) {
+function isScannerFutureRow(row) {
   if (!row || !row.future || row.score) return false;
   const api = String(row.api || "");
-  return api === "dom-grid" || api === "robot-game";
+  return row.source === "api" || api === "dom-grid" || api === "robot-game";
 }
 
 function historyRows(liga, market) {
@@ -245,7 +245,7 @@ function historyRows(liga, market) {
 
 function upcomingRows(liga, market) {
   return uniqueRows(state.rows)
-    .filter(row => Number(row.liga) === Number(liga) && isScreenFutureRow(row) && (row.name || row.time) && isFutureTime(row.time))
+    .filter(row => Number(row.liga) === Number(liga) && isScannerFutureRow(row) && (row.name || row.time) && isFutureTime(row.time))
     .sort((a, b) => futureDistance(a) - futureDistance(b))
     .slice(0, 6);
 }
