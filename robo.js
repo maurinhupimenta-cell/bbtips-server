@@ -13,7 +13,8 @@ clearInterval(window[TIMER]);
 ["BBTIPS_FINAL_ROBO_TIMER","BBTIPS_API_ALERTAS_TIMER","BBTIPS_INTERCEPTA_API_TIMER","BBTIPS_PRO_TRADER_TIMER","HB_MULTI_TIMER","BBTIPS_SCANNER_COLLECT_TIMER"].forEach(k=>{try{clearInterval(window[k])}catch(e){}});
 ["bbtips-api-alertas","bbtips-intercepta-api","hb-multi","hb-tips-scanner"].forEach(id=>document.getElementById(id)?.remove());
 
-const CONFIG={market:"over25",tol:0.8,minEV:3,minProb:52,minOddPct:45,minOddSample:30,minTeamSample:30,maxProximos:6,intervalMs:25000,windows:[120,240,480,960],ligas:[1,2,3,4,5,6],ligaAuto:true,horas:"Horas3",filtros:"o15,o25,u25,ambs,ambn,o35,u15,u35,ge5,tgv5,tgc5,ftc,fte,ftv"};
+const CONFIG={market:"over25",tol:0.8,minEV:3,minProb:52,minOddPct:45,minOddSample:30,minTeamSample:30,maxProximos:6,intervalMs:25000,windows:[120,240,480,960],ligas:[1,2,3,4,5,6],radarLigas:[1,2,3,4],ligaAuto:true,horas:"Horas3",filtros:"o15,o25,u25,ambs,ambn,o35,u15,u35,ge5,tgv5,tgc5,ftc,fte,ftv"};
+const LIGA_LABELS={1:"Copa",2:"Euro",3:"Super",4:"Premier",5:"Split",6:"Express"};
 const SCHEDULE_TIME_ZONE="Europe/London";
 let PANEL_HOVER=false;
 let TOOLTIP_SERIES=[];
@@ -692,6 +693,7 @@ function currentHours(){
   }catch(e){}
   return read(CONFIG.horas)||"Horas3";
 }
+function ligaLabel(liga){return LIGA_LABELS[liga]||`Liga ${liga}`}
 function apiUrl(liga,futuro){
   return `https://api.thtips.com.br/api/futebolvirtual?liga=${liga}&futuro=${futuro?"true":"false"}&Horas=${currentHours()}&tipoOdd=&dadosAlteracao=&filtros=${encodeURIComponent(CONFIG.filtros)}&confrontos=false&hrsConfrontos=240&plataforma=${encodeURIComponent(currentPlatform())}`;
 }
@@ -1324,6 +1326,99 @@ function ligaStatsText(m){
   const g=rows.filter(r=>r.green).length,p=g/rows.length*100;
   return `Liga atual: ${g}/${rows.length} ${p.toFixed(1)}% ${p>=55?"liga quente":p<=40?"liga fria":"liga neutra"}`;
 }
+function apiHistoryForLiga(liga){
+  const seen=new Set();
+  return API_ROWS
+    .filter(r=>r&&r.score&&!r.future&&r.liga===liga)
+    .sort((a,b)=>resultAge(a)-resultAge(b)||a.idx-b.idx)
+    .filter(r=>{
+      const key=[r.liga,r.time,r.name,rowScoreText(r)].join("|");
+      if(seen.has(key))return false;
+      seen.add(key);
+      return true;
+    });
+}
+function statForRows(rows,m,limit){
+  const base=rows.filter(r=>paysMarket(r.score,m)!==null).slice(0,limit);
+  const g=base.filter(r=>paysMarket(r.score,m)).length;
+  return {g,j:base.length,p:base.length?g/base.length*100:null};
+}
+function fmtRadarStat(s){
+  return s&&s.j?`${s.g}/${s.j} ${s.p.toFixed(0)}%`:"--";
+}
+function radarStatClass(s){
+  if(!s||!s.j)return "warn";
+  return s.p>=55?"ok":s.p<=42?"bad":"warn";
+}
+function exactOddStatsForRows(rows,odd,m){
+  const target=Number(odd);
+  if(!Number.isFinite(target))return null;
+  const base=rows.filter(r=>{
+    const o=oddFromObj(r.odds,m);
+    return Number.isFinite(o)&&Math.abs(o-target)<=0.05;
+  });
+  if(!base.length)return {g:0,j:0,p:null,cold:false};
+  const g=base.filter(r=>paysMarket(r.score,m)).length;
+  const p=g/base.length*100;
+  return {g,j:base.length,p,cold:base.length>=CONFIG.minOddSample&&p<CONFIG.minOddPct};
+}
+function nextGamesForLiga(liga,m,limit=2){
+  const seen=new Set();
+  return API_ROWS
+    .filter(r=>r&&r.future&&!r.score&&r.liga===liga)
+    .filter(r=>!r.time||isFuture(r.time))
+    .map(r=>({time:r.time,name:r.name,odd:oddFromObj(r.odds,m),market:m,text:txtFromApiRow(r),liga}))
+    .filter(g=>Number.isFinite(g.odd)&&g.odd>1)
+    .sort((a,b)=>(parseTime(a.time)??9999)-(parseTime(b.time)??9999)||String(a.name).localeCompare(String(b.name)))
+    .filter(g=>{
+      const key=[g.time,g.name,g.odd].join("|");
+      if(seen.has(key))return false;
+      seen.add(key);
+      return true;
+    })
+    .slice(0,limit);
+}
+function radarDecision(s15,s30,s120){
+  if(!s30.j||s30.j<12)return {label:"JUNTANDO BASE",cls:"warn",note:"clique API/aguarde mais jogos"};
+  const p15=Number.isFinite(s15.p)?s15.p:s30.p;
+  const p30=s30.p;
+  const p120=Number.isFinite(s120.p)?s120.p:p30;
+  const delta=p15-p30;
+  if(p15>=58&&p30>=52&&delta>=-6)return {label:"LIGA QUENTE",cls:"ok",note:"boa para procurar odd justa"};
+  if(p15>=50&&delta>=8&&p15>=p120)return {label:"VIRANDO P/ ALTA",cls:"ok",note:"melhor quando proximo jogo nao tem odd fria"};
+  if(p15<=35&&p30<=42)return {label:"LIGA FRIA",cls:"bad",note:"evitar compra seca"};
+  if(delta<=-10)return {label:"CAINDO",cls:"bad",note:"esperar novo fundo/virada"};
+  if(p30<=42&&p15>=p30+6)return {label:"FUNDO REAGINDO",cls:"warn",note:"observar confirmacao"};
+  return {label:"NEUTRA",cls:"warn",note:"sem vantagem clara"};
+}
+function radarNextText(games,rows,m){
+  if(!games.length)return "sem proximo com odd";
+  return games.map(g=>{
+    const odd=exactOddStatsForRows(rows,g.odd,m);
+    const cold=odd?.cold?" <span class='bad'>ODD FRIA</span>":"";
+    const base=odd&&odd.j?` ${odd.g}/${odd.j} ${odd.p.toFixed(0)}%`:" sem base";
+    return `${esc(g.time||"-")} ${esc(g.name)} @${g.odd.toFixed(2)}${base}${cold}`;
+  }).join("<br>");
+}
+function multiLeagueRadarBox(){
+  const m=market();
+  const ligas=(CONFIG.radarLigas||[1,2,3,4]).filter(l=>Number.isFinite(l));
+  const hasData=API_ROWS.some(r=>ligas.includes(r.liga));
+  if(!hasData){
+    return `<div class="sig"><b class="warn">Radar simultaneo das 4 ligas</b><br>Sem dados das ligas ainda. Clique em API para carregar Copa, Euro, Super e Premier ao mesmo tempo.</div>`;
+  }
+  const o25=MARKETS.find(x=>x.key==="over25");
+  const o35=MARKETS.find(x=>x.key==="over35");
+  const btts=MARKETS.find(x=>x.key==="ambas_sim");
+  return `<h3>Radar simultaneo das 4 ligas</h3><table><tr><th>Liga</th><th>Status</th><th>${esc(m.name)} 15/30/120</th><th>Over/Ambas 30j</th><th>Proximos do mercado</th></tr>${ligas.map(liga=>{
+    const rows=apiHistoryForLiga(liga);
+    const s15=statForRows(rows,m,15),s30=statForRows(rows,m,30),s120=statForRows(rows,m,120);
+    const d=radarDecision(s15,s30,s120);
+    const gols=[o25,o35,btts].filter(Boolean).map(x=>`${esc(x.name.replace("Ambas Sim","Ambas"))}: <span class="${radarStatClass(statForRows(rows,x,30))}">${fmtRadarStat(statForRows(rows,x,30))}</span>`).join("<br>");
+    const next=nextGamesForLiga(liga,m,2);
+    return `<tr><td><b>${esc(ligaLabel(liga))}</b><br>${rows.length} hist</td><td class="${d.cls}"><b>${d.label}</b><br>${esc(d.note)}</td><td><span class="${radarStatClass(s15)}">${fmtRadarStat(s15)}</span> | <span class="${radarStatClass(s30)}">${fmtRadarStat(s30)}</span> | <span class="${radarStatClass(s120)}">${fmtRadarStat(s120)}</span></td><td>${gols||"--"}</td><td>${radarNextText(next,rows,m)}</td></tr>`;
+  }).join("")}</table>`;
+}
 function sidePayPct(team,m,side){
   const nm=esc(team).toLowerCase();
   const rows=RESULTS_CACHE.filter(r=>{const p=teamNames(r.name);return side==="casa"?p[0]===nm:p[1]===nm});
@@ -1754,7 +1849,8 @@ function draw(){
   <span>Mercado <select id="rb-market">${opts}</select> EV real+ <input id="rb-ev" value="${CONFIG.minEV}"> Prob <input id="rb-prob" value="${CONFIG.minProb}"> OddFria% <input id="rb-cold" value="${CONFIG.minOddPct}"> Prox <input id="rb-maxprox" value="${CONFIG.maxProximos}"> Tol <input id="rb-tol" value="${CONFIG.tol}">
   <button id="rb-api">API</button><button id="rb-hist">Historico</button><button id="rb-scan">Atualizar</button><button id="rb-som">Som</button><button id="rb-min">Minimizar</button><button id="rb-close">Fechar</button></span></div>
   <div class="body">
-    <h3>Proximos jogos</h3>${trendUpBox()}${marketRankingBox()}${gamesTable(a.games,a.series)}
+    ${multiLeagueRadarBox()}
+    <h3>Proximos jogos da liga atual</h3>${trendUpBox()}${marketRankingBox()}${gamesTable(a.games,a.series)}
     <h3>Sinais por minima calculada pelos resultados</h3>${signalsBox(a.signals)}
     <h3>Pagamento do mercado aberto</h3>${statusStatsBox()}
     <h3>Conferencia dos ultimos resultados</h3>${resultsCheckTable()}
