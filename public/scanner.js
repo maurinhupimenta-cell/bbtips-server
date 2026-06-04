@@ -234,7 +234,7 @@ function uniqueRows(rows) {
 function isScannerFutureRow(row) {
   if (!row || !row.future || row.score) return false;
   const api = String(row.api || "");
-  return row.source === "api" || api === "dom-grid" || api === "robot-game";
+  return row.source === "api" || api === "dom-grid" || api === "robot-game" || api === "agent-api";
 }
 
 function historyRows(liga, market) {

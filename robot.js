@@ -405,6 +405,8 @@ function compactTelemetryRow(r){
     const n=Number(String(v).replace(",","."));
     if(Number.isFinite(n)&&n>1)odds[k]=Math.round(n*100)/100;
   });
+  const rawApi=String(r.api||"").slice(0,240);
+  const api=!!r.future&&!r.score&&/futebolvirtual/i.test(rawApi)?"agent-api":rawApi;
   return {
     key:String(r.key||[r.liga||"",r.time||"",r.name||"",r.score?`${r.score.a}-${r.score.b}`:"",r.future?"f":"h"].join("|")),
     liga:r.liga??ligaFromUrl(r.api||"")??null,
@@ -415,7 +417,7 @@ function compactTelemetryRow(r){
     future:!!r.future,
     platform:String(r.platform||platformFromUrl(r.api||"")).toUpperCase(),
     hours:String(r.hours||hoursFromUrl(r.api||"")||currentHours()),
-    api:String(r.api||"").slice(0,240),
+    api,
     idx:Number(r.idx||0)
   };
 }
@@ -506,7 +508,7 @@ function gameRowsForTelemetry(games=[]){
 function isVisibleFutureRow(r){
   if(!r||!r.future||r.score)return false;
   const api=String(r.api||"");
-  return api==="dom-grid"||api==="robot-game";
+  return api==="dom-grid"||api==="robot-game"||api==="agent-api"||/futebolvirtual/i.test(api);
 }
 function rowsForTelemetry(seed=[]){
   const by={};
@@ -1908,7 +1910,7 @@ function draw(){
   const opts=MARKETS.map(m=>`<option value="${m.key}" ${m.key===CONFIG.market?"selected":""}>${m.name}</option>`).join("");
   P.innerHTML=`<div class="top"><b>BBTips Robo | ${new Date().toLocaleTimeString()} | Liga ${ligaAtual||"auto"} | Mercado ${esc(market().name)} | API ${API_ROWS.length} | Resultados ${RESULTS_CACHE.length} | Proximos ${a.games.length} | Sinais ${a.signals.length}${fundoTxt}</b>
   <span>Mercado <select id="rb-market">${opts}</select> EV real+ <input id="rb-ev" value="${CONFIG.minEV}"> Prob <input id="rb-prob" value="${CONFIG.minProb}"> OddFria% <input id="rb-cold" value="${CONFIG.minOddPct}"> Prox <input id="rb-maxprox" value="${CONFIG.maxProximos}"> Tol <input id="rb-tol" value="${CONFIG.tol}">
-  <button id="rb-api">API</button><button id="rb-hist">Historico</button><button id="rb-scan">Atualizar</button><button id="rb-som">Som</button><button id="rb-min">Minimizar</button><button id="rb-close">Fechar</button></span></div>
+  <button id="rb-api">Agente API</button><button id="rb-hist">Historico</button><button id="rb-scan">Atualizar</button><button id="rb-som">Som</button><button id="rb-min">Minimizar</button><button id="rb-close">Fechar</button></span></div>
   <div class="body">
     ${multiLeagueRadarBox()}
     <h3>Proximos jogos da liga atual</h3>${trendUpBox()}${marketRankingBox()}${gamesTable(a.games,a.series)}
