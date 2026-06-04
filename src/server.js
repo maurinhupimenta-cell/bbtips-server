@@ -183,6 +183,29 @@ function scannerCanonicalKey(row, liga, platform) {
   ].join("|");
 }
 
+function scannerFutureOddsKey(row, liga) {
+  return [
+    liga ?? row?.liga ?? "",
+    row?.time ?? "",
+    scannerNormalize(row?.name || "")
+  ].join("|");
+}
+
+function scannerHasAnyOdd(row) {
+  const odds = parseScannerOdds(row?.odds || {});
+  return Object.values(odds).some(value => {
+    const n = Number(String(value).replace(",", "."));
+    return Number.isFinite(n) && n > 1;
+  });
+}
+
+function scannerMergeOdds(primary, fallback) {
+  return {
+    ...parseScannerOdds(fallback?.odds || {}),
+    ...parseScannerOdds(primary?.odds || {})
+  };
+}
+
 function scannerVisibleFutureSource(row) {
   const api = String(row?.api || "");
   return api === "dom-grid" || api === "robot-game";
@@ -262,8 +285,7 @@ async function fetchScannerApiRows(platform = "BET365", hours = "Horas3") {
   const rows = [];
   const errors = [];
   const ligas = [1, 2, 3, 4, 5, 6];
-  await Promise.all(ligas.map(async liga => {
-    const futuro = false;
+  await Promise.all(ligas.flatMap(liga => [false, true].map(async futuro => {
     const url = scannerApiUrl(liga, futuro, cacheKey, hoursKey);
     try {
       const controller = new AbortController();
@@ -276,7 +298,7 @@ async function fetchScannerApiRows(platform = "BET365", hours = "Horas3") {
     } catch (error) {
       errors.push(`${liga} ${futuro ? "futuro" : "hist"} ${error.name || "erro"}`);
     }
-  }));
+  })));
   const next = { at: now, rows: rows.slice(-6000), errors, platform: cacheKey, hours: hoursKey };
   scannerApiCache.set(`${cacheKey}|${hoursKey}`, next);
   return next;
@@ -397,6 +419,12 @@ app.get("/api/scanner-data", requireUserOrAdmin, async (req, res) => {
 
   const activeHours = recentHours;
   const finalApiData = await fetchScannerApiRows(platform, activeHours);
+  const apiFutureOddsByKey = new Map();
+  for (const row of finalApiData.rows) {
+    const rowHours = normalizeScannerHours(row.hours) || activeHours;
+    if (rowHours !== activeHours || !row.future || row.score || !scannerHasAnyOdd(row)) continue;
+    apiFutureOddsByKey.set(scannerFutureOddsKey(row, row.liga), row);
+  }
   const latestFutureMsByLiga = new Map();
   for (const item of telemetry.rows) {
     const payload = item.payload || {};
@@ -478,11 +506,18 @@ app.get("/api/scanner-data", requireUserOrAdmin, async (req, res) => {
         const latestFutureMs = latestFutureMsByLiga.get(resolvedLiga);
         if (!latestFutureMs || new Date(item.created_at).getTime() !== latestFutureMs) continue;
       }
-      const key = scannerCanonicalKey(row, resolvedLiga, rowPlatform);
+      let nextRow = row;
+      if (row.future && !row.score) {
+        const apiOddsRow = apiFutureOddsByKey.get(scannerFutureOddsKey(row, resolvedLiga));
+        const mergedOdds = scannerMergeOdds(row, apiOddsRow);
+        nextRow = { ...row, odds: mergedOdds, oddsSource: apiOddsRow ? "screen+api-odds" : "screen" };
+        if (!scannerHasAnyOdd(nextRow)) continue;
+      }
+      const key = scannerCanonicalKey(nextRow, resolvedLiga, rowPlatform);
       if (seen.has(key)) continue;
       seen.add(key);
       out.push({
-        ...row,
+        ...nextRow,
         liga: resolvedLiga,
         platform: rowPlatform || null,
         hours: rowHours,
