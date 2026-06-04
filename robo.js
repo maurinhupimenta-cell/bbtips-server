@@ -203,11 +203,19 @@ function oddFromObj(odds,m){
   }
   return null;
 }
+function leadingIntFromText(value,min,max){
+  const lines=String(value||"").split(/\n/).map(x=>x.trim()).filter(Boolean);
+  for(const line of lines.slice(0,3)){
+    const m=line.match(/^(\d{1,2})(?:\D|$)/);
+    if(!m)continue;
+    const n=Number(m[1]);
+    if(Number.isInteger(n)&&n>=min&&n<=max)return n;
+  }
+  return null;
+}
 function rowHourInfo(cells){
   for(let i=0;i<Math.min(cells.length,4);i++){
-    const txt=esc(cells[i]?.innerText||"").trim();
-    if(!/^\d{1,2}$/.test(txt))continue;
-    const hour=Number(txt);
+    const hour=leadingIntFromText(cells[i]?.innerText||"",0,23);
     if(Number.isInteger(hour)&&hour>=0&&hour<=23)return {hour,index:i};
   }
   return null;
@@ -227,13 +235,66 @@ function fillMinuteByCol(rows){
     if(headerIndex<0)return;
     cells.forEach((c,i)=>{
       if(i<=headerIndex)return;
-      const txt=esc(c.innerText||"").trim();
-      if(!/^\d{1,2}$/.test(txt))return;
-      const n=Number(txt);
+      const n=leadingIntFromText(c.innerText||"",0,59);
       if(Number.isInteger(n)&&n>=0&&n<60)minuteByCol[i]=n;
     });
   });
   return minuteByCol;
+}
+function isReaderVisibleElement(el){
+  if(!el||el.closest?.(`#${PANEL},#bbtips-robo-root,#bbtips-robo-desenho,script,style,noscript`))return false;
+  const r=el.getBoundingClientRect?.();
+  if(!r||r.width<35||r.height<24||r.width>360||r.height>260)return false;
+  if(r.bottom<=0||r.right<=0||r.top>=innerHeight||r.left>=innerWidth)return false;
+  const st=getComputedStyle(el);
+  return st.display!=="none"&&st.visibility!=="hidden"&&Number(st.opacity||1)>0.05;
+}
+function timeFromGameText(txt){
+  const m=String(txt||"").match(/\b(\d{1,2})[.:](\d{2})\b/);
+  if(!m)return "";
+  const h=Number(m[1]),mi=Number(m[2]);
+  return h>=0&&h<24&&mi>=0&&mi<60?`${h}.${String(mi).padStart(2,"0")}`:"";
+}
+function hasChildGameCell(el){
+  return Array.from(el.children||[]).some(ch=>{
+    const txt=ch.innerText||"";
+    return /\s+x\s+/i.test(txt)&&Object.keys(oddsObjectFromText(txt)).length;
+  });
+}
+function readVisibleGameRows(anchor=null, seen=new Set()){
+  const out=[];
+  const liga=activeLiga();
+  const platform=currentPlatform();
+  const hours=currentHours();
+  document.querySelectorAll("td,div").forEach((el,idx)=>{
+    if(!isReaderVisibleElement(el)||hasChildGameCell(el))return;
+    const txt=el.innerText||"";
+    if(!/\s+x\s+/i.test(txt)||hasResult(txt))return;
+    const odds=oddsObjectFromText(txt);
+    if(!Object.keys(odds).length)return;
+    const name=gameName(txt);
+    if(!name||name.length<5)return;
+    const time=timeFromGameText(txt);
+    if(time&&!isScheduleFuture(time,anchor))return;
+    const key=["dom-visible",platform,liga||"auto",time||"sem-hora",name].join("|");
+    if(seen.has(key))return;
+    seen.add(key);
+    out.push({
+      key,
+      liga,
+      time,
+      name,
+      score:null,
+      odds,
+      future:true,
+      platform,
+      hours,
+      api:"dom-grid",
+      idx,
+      txt:String(txt).slice(0,500)
+    });
+  });
+  return out.sort((a,b)=>scheduleDistance(a.time,anchor)-scheduleDistance(b.time,anchor)).slice(0,160);
 }
 function txtFromApiRow(r){
   const odds=MARKETS.map(m=>{
@@ -413,6 +474,7 @@ function readGridRowsForTelemetry(anchor=null){
       });
     });
   });
+  readVisibleGameRows(futureAnchor,seen).forEach(row=>out.push(row));
   return out.sort((a,b)=>scheduleDistance(a.time,futureAnchor)-scheduleDistance(b.time,futureAnchor)).slice(0,160);
 }
 function gameRowsForTelemetry(games=[]){
@@ -761,6 +823,17 @@ function readGridGames(){
           games.push({time,name,market:m,odd:odds[0],text:txt});
         });
       });
+    });
+  });
+  if(games.length)return games.sort((a,b)=>(parseTime(a.time)??9999)-(parseTime(b.time)??9999)).slice(0,CONFIG.maxProximos);
+  readVisibleGameRows(scheduleAnchorFromRows([...upcoming]),seen).forEach(r=>{
+    activeMarkets().forEach(m=>{
+      const odd=oddFromObj(r.odds,m);
+      if(!odd)return;
+      const key=`${r.time}|${r.name}|${m.key}|${odd}`;
+      if(seen.has(key))return;
+      seen.add(key);
+      games.push({time:r.time,name:r.name,market:m,odd,text:r.txt,api:true});
     });
   });
   if(games.length)return games.sort((a,b)=>(parseTime(a.time)??9999)-(parseTime(b.time)??9999)).slice(0,CONFIG.maxProximos);
