@@ -281,14 +281,14 @@ function teamPayPct(game, history, market) {
     const text = String(row.name || row.txt || "").toLowerCase();
     return names.some(name => text.includes(name));
   });
-  if (rows.length < MIN_SAMPLE) return null;
-  return { g: rows.filter(row => market.pays(row.score)).length, j: rows.length, p: pct(rows, market) };
+  const g = rows.filter(row => market.pays(row.score)).length;
+  return { g, j: rows.length, p: rows.length ? pct(rows, market) : null };
 }
 
 function oddPayPct(odd, history, market) {
   const rows = history.filter(row => oddsForMarket(row, market).some(value => Math.abs(value - odd) <= 0.05));
-  if (rows.length < MIN_SAMPLE) return null;
-  return { g: rows.filter(row => market.pays(row.score)).length, j: rows.length, p: pct(rows, market) };
+  const g = rows.filter(row => market.pays(row.score)).length;
+  return { g, j: rows.length, p: rows.length ? pct(rows, market) : null };
 }
 
 function weightedProb(lineP, team, odd) {
@@ -311,7 +311,8 @@ function analyzeGame(row, history, line, market) {
   const breakEven = oddValue ? 100 / oddValue : null;
   const edge = prob !== null && breakEven !== null ? prob - breakEven : null;
   const ev = prob !== null && oddValue ? (prob / 100 * oddValue - 1) * 100 : null;
-  const coldOdd = odd && odd.j >= MIN_SAMPLE && odd.p < MIN_ODD_PCT;
+  const coldOdd = odd && odd.j >= MIN_SAMPLE && Number.isFinite(odd.p) && odd.p < MIN_ODD_PCT;
+  const hasBase = (team && team.j > 0) || (odd && odd.j > 0);
   let status = "SEM BASE";
   let rank = 0;
   if (!oddValue) {
@@ -327,7 +328,7 @@ function analyzeGame(row, history, line, market) {
     rank = 1;
   } else if (ev !== null && ev >= MIN_EV && edge >= MIN_EDGE) {
     status = "OBSERVAR";
-    rank = team || odd ? 2 : 1;
+    rank = hasBase ? 2 : 1;
   } else if (ev !== null) {
     status = "AGUARDAR";
     rank = 1;

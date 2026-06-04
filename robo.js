@@ -13,7 +13,7 @@ clearInterval(window[TIMER]);
 ["BBTIPS_FINAL_ROBO_TIMER","BBTIPS_API_ALERTAS_TIMER","BBTIPS_INTERCEPTA_API_TIMER","BBTIPS_PRO_TRADER_TIMER","HB_MULTI_TIMER","BBTIPS_SCANNER_COLLECT_TIMER"].forEach(k=>{try{clearInterval(window[k])}catch(e){}});
 ["bbtips-api-alertas","bbtips-intercepta-api","hb-multi","hb-tips-scanner","bbtips-robo-root","bbtips-robo-canvas","bbtips-robo-desenho","bbtips-marker-handle"].forEach(id=>document.getElementById(id)?.remove());
 
-const CONFIG={market:"over25",tol:0.8,minEV:5,minEdge:3,minProb:0,minOddPct:45,minOddSample:12,minTeamSample:12,maxProximos:4,intervalMs:180000,windows:[120,240,480,960],ligas:[1,2,3,4,5,6],radarLigas:[1,2,3,4],ligaAuto:true,autoRefresh:false,autoApi:false,alerts:false,scannerTelemetry:false,graphRobo:true,horas:"Horas3",filtros:"o15,o25,u25,ambs,ambn,o35,u15,u35,ge5,tgv5,tgc5,ftc,fte,ftv"};
+const CONFIG={market:"over25",tol:0.8,minEV:5,minEdge:3,minProb:0,minOddPct:45,minOddSample:12,minTeamSample:12,maxProximos:4,intervalMs:180000,windows:[120,240,480,960],ligas:[1,2,3,4,5,6],radarLigas:[1,2,3,4],ligaAuto:true,autoRefresh:false,autoApi:false,alerts:true,scannerTelemetry:false,graphRobo:true,horas:"Horas3",filtros:"o15,o25,u25,ambs,ambn,o35,u15,u35,ge5,tgv5,tgc5,ftc,fte,ftv"};
 const LIGA_LABELS={1:"Copa",2:"Euro",3:"Super",4:"Premier",5:"Split",6:"Express"};
 const SCHEDULE_TIME_ZONE="Europe/London";
 let PANEL_HOVER=false;
@@ -1312,9 +1312,8 @@ function teamPayPct(game,m){
     const t=r.txt.toLowerCase();
     return names.some(n=>n&&t.includes(n));
   });
-  if(rows.length<CONFIG.minTeamSample)return null;
   const g=rows.filter(r=>paysMarket(r.score,m)).length;
-  return {g,j:rows.length,p:g/rows.length*100};
+  return {g,j:rows.length,p:rows.length?g/rows.length*100:null};
 }
 function oddPayPct(game,m){
   const target=game.odd;
@@ -1327,9 +1326,8 @@ function oddPayPct(game,m){
     }
     return hit;
   }));
-  if(rows.length<CONFIG.minOddSample)return null;
   const g=rows.filter(r=>paysMarket(r.score,m)).length;
-  return {g,j:rows.length,p:g/rows.length*100};
+  return {g,j:rows.length,p:rows.length?g/rows.length*100:null};
 }
 function scoreKey(score){return score?`${score.a}-${score.b}`:"-"}
 function orderedResults(){
@@ -1492,7 +1490,8 @@ function sidePayPct(team,m,side){
   const g=rows.filter(r=>paysMarket(r.score,m)).length;
   return {g,j:rows.length,p:g/rows.length*100};
 }
-function fmtStat(s){return s?`${s.g}/${s.j} ${s.p.toFixed(1)}%`:"sem base"}
+function fmtStat(s){return s?`${s.g}/${s.j} ${Number.isFinite(s.p)?s.p.toFixed(1)+"%":"-"}`:"0/0 -"}
+function fmtBaseStat(s){return s?`${s.g}/${s.j} ${Number.isFinite(s.p)?s.p.toFixed(1)+"%":"-"}`:"0/0 -"}
 function rankRowsForHours(m,hours){
   const maxAge=hours*60;
   return RESULTS_CACHE.filter(r=>r.score&&paysMarket(r.score,m)!==null&&resultAge(r)<=maxAge);
@@ -1679,13 +1678,13 @@ function analysisForGame(g,series){
   if(best?.fundo)score+=35;
   if(evOk)score+=20;
   if(evGale!==null&&evGale>0)score+=20;
-  if(team)score+=Math.max(0,Math.min(20,(team.p-50)/2));
-  if(odd)score+=Math.max(0,Math.min(20,(odd.p-50)/2));
+  if(team&&Number.isFinite(team.p))score+=Math.max(0,Math.min(20,(team.p-50)/2));
+  if(odd&&Number.isFinite(odd.p))score+=Math.max(0,Math.min(20,(odd.p-50)/2));
   if(minHits.some(r=>r.w>=480))score+=10;
-  const strongBase=(team&&team.p>=50)||(odd&&odd.p>=50)||(!team&&!odd&&prob!==null);
-  const coldOdd=odd&&odd.j>=CONFIG.minOddSample&&odd.p<CONFIG.minOddPct;
+  const strongBase=(team&&Number.isFinite(team.p)&&team.p>=50)||(odd&&Number.isFinite(odd.p)&&odd.p>=50)||(!team&&!odd&&prob!==null);
+  const coldOdd=odd&&odd.j>=CONFIG.minOddSample&&Number.isFinite(odd.p)&&odd.p<CONFIG.minOddPct;
   const valueOk=evOk&&probOk;
-  const baseForte=(team&&team.j>=CONFIG.minTeamSample&&team.p>=52)||(odd&&odd.j>=CONFIG.minOddSample&&odd.p>=52);
+  const baseForte=(team&&team.j>=CONFIG.minTeamSample&&Number.isFinite(team.p)&&team.p>=52)||(odd&&odd.j>=CONFIG.minOddSample&&Number.isFinite(odd.p)&&odd.p>=52);
   if(evGale!==null&&evGale>=CONFIG.minEV&&valueOk&&baseForte&&!coldOdd)score=Math.max(score,70);
   if(score<55&&valueOk&&baseForte&&!coldOdd)score=55;
   if(score<45&&valueOk&&!coldOdd)score=45;
@@ -1794,8 +1793,8 @@ function gamesTable(games,series){
     const ev=an.ev===null?"-":`${an.ev.toFixed(1)}%`;
     const edge=an.probEdge===null?"-":`${an.probEdge.toFixed(1)}%`;
     const evG=an.evGale===null?"-":`${an.evGale.toFixed(1)}%`;
-    const team=an.team?`${an.team.g}/${an.team.j} ${an.team.p.toFixed(1)}%`:"sem base";
-    const odd=an.odd?`${an.odd.g}/${an.odd.j} ${an.odd.p.toFixed(1)}%${an.coldOdd?" ODD FRIA":""}`:"sem base";
+    const team=fmtBaseStat(an.team);
+    const odd=`${fmtBaseStat(an.odd)}${an.coldOdd?" ODD FRIA":""}`;
     const ciclo=cycleText(marketCycleStats(g.market));
     const oddFixa=exactOddText(exactOddStats(g,g.market));
     const horario=hourStatsText(hourStatsForGame(g,g.market));
