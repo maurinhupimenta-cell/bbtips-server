@@ -267,6 +267,9 @@ function isReaderVisibleElement(el){
   const st=getComputedStyle(el);
   return st.display!=="none"&&st.visibility!=="hidden"&&Number(st.opacity||1)>0.05;
 }
+function isOwnPanelElement(el){
+  return Boolean(el?.closest?.(`#${PANEL},#bbtips-robo-root,#bbtips-robo-desenho,script,style,noscript`));
+}
 function timeFromGameText(txt){
   const lines=String(txt||"").split(/\n/).map(x=>x.trim()).filter(Boolean);
   for(const line of lines.slice(0,4)){
@@ -461,6 +464,7 @@ function readGridRowsForTelemetry(anchor=null){
   const platform=currentPlatform();
   const hours=currentHours();
   document.querySelectorAll("table").forEach(table=>{
+    if(isOwnPanelElement(table))return;
     const rows=[...table.querySelectorAll("tr")];
     const minuteByCol=fillMinuteByCol(rows);
     rows.forEach(tr=>{
@@ -816,6 +820,7 @@ async function carregarApiDireto(opts={}){
 function upcomingSetFromPage(){
   const set=new Set();
   document.querySelectorAll("tr").forEach(tr=>{
+    if(isOwnPanelElement(tr))return;
     const cells=[...tr.children].map(c=>esc(c.innerText||""));
     if(cells.length<2)return;
     if(/^\d{1,2}[.:]\d{2}$/.test(cells[0])&&/\s+x\s+/i.test(cells[1]))set.add(cells[0].replace(":","."));
@@ -825,6 +830,7 @@ function upcomingSetFromPage(){
 function readGridGames(){
   const games=[],seen=new Set(),upcoming=upcomingSetFromPage();
   document.querySelectorAll("table").forEach(table=>{
+    if(isOwnPanelElement(table))return;
     const rows=[...table.querySelectorAll("tr")];
     const minuteByCol=fillMinuteByCol(rows);
     rows.forEach(tr=>{
@@ -1220,6 +1226,7 @@ function allResultCells(){
   }
   let idx=0;
   document.querySelectorAll("td").forEach(el=>{
+    if(isOwnPanelElement(el))return;
     if(!isClosedResultCell(el))return;
     const txt=elementReaderText(el);
     if(!/\s+x\s+/i.test(txt))return;
@@ -1240,6 +1247,7 @@ function allResultCells(){
 function gridResultCells(){
   const out=[];
   document.querySelectorAll("table").forEach(table=>{
+    if(isOwnPanelElement(table))return;
     const rows=[...table.querySelectorAll("tr")];
     const minuteByCol={};
     rows.forEach(tr=>{
