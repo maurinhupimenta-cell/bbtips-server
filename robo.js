@@ -513,7 +513,7 @@ function gameRowsForTelemetry(games=[]){
 function isVisibleFutureRow(r){
   if(!r||!r.future||r.score)return false;
   const api=String(r.api||"");
-  return api==="dom-grid"||api==="robot-game";
+  return api==="dom-grid"||api==="robot-game"||/futebolvirtual/i.test(api);
 }
 function rowsForTelemetry(seed=[]){
   const by={};
@@ -776,7 +776,7 @@ async function carregarApiDireto(opts={}){
     const ligaAtual=activeLiga();
     const ligas=ligaAtual?[ligaAtual]:CONFIG.radarLigas;
     for(const liga of ligas){
-      for(const futuro of [false]){
+      for(const futuro of [false,true]){
         const url=apiUrl(liga,futuro);
         try{
           const r=await fetch(url,{credentials:"include",cache:"no-store"});
@@ -847,6 +847,23 @@ function readGridGames(){
       games.push({time:r.time,name:r.name,market:m,odd,text:r.txt,api:true});
     });
   });
+  if(games.length)return games.sort((a,b)=>(parseTime(a.time)??9999)-(parseTime(b.time)??9999)).slice(0,CONFIG.maxProximos);
+  const liga=activeLiga();
+  if(liga){
+    API_ROWS
+      .filter(r=>r&&r.future&&!r.score&&Number(r.liga)===Number(liga))
+      .filter(r=>!r.time||isFuture(r.time))
+      .forEach(r=>{
+        activeMarkets().forEach(m=>{
+          const odd=oddFromObj(r.odds,m);
+          if(!odd)return;
+          const key=`${r.time}|${r.name}|${m.key}|${odd}`;
+          if(seen.has(key))return;
+          seen.add(key);
+          games.push({time:r.time,name:r.name,market:m,odd,text:txtFromApiRow(r),api:true});
+        });
+      });
+  }
   if(games.length)return games.sort((a,b)=>(parseTime(a.time)??9999)-(parseTime(b.time)??9999)).slice(0,CONFIG.maxProximos);
   return [];
 }
