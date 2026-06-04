@@ -14,7 +14,6 @@ const adminUser = process.env.ADMIN_USER || "admin";
 const adminPass = process.env.ADMIN_PASS || "admin123";
 const scannerApiCache = new Map();
 const scannerScheduleTimeZone = "Europe/London";
-const scannerPlatforms = ["BET365", "PLAYPIX", "KIRON", "SUPERBET", "BETANO", "SPORTINGBET", "BETFAIR", "NOVIBET"];
 
 if (!process.env.DATABASE_URL) {
   console.warn("DATABASE_URL nao definido. No Railway, adicione um Postgres ao projeto.");
@@ -186,7 +185,7 @@ function scannerCanonicalKey(row, liga, platform) {
 
 function scannerVisibleFutureSource(row) {
   const api = String(row?.api || "");
-  return api === "dom-grid" || api === "robot-game" || api === "agent-api";
+  return api === "dom-grid" || api === "robot-game";
 }
 
 function parseScannerOdds(raw) {
@@ -263,7 +262,8 @@ async function fetchScannerApiRows(platform = "BET365", hours = "Horas3") {
   const rows = [];
   const errors = [];
   const ligas = [1, 2, 3, 4, 5, 6];
-  await Promise.all(ligas.flatMap(liga => [false, true].map(async futuro => {
+  await Promise.all(ligas.map(async liga => {
+    const futuro = false;
     const url = scannerApiUrl(liga, futuro, cacheKey, hoursKey);
     try {
       const controller = new AbortController();
@@ -276,31 +276,10 @@ async function fetchScannerApiRows(platform = "BET365", hours = "Horas3") {
     } catch (error) {
       errors.push(`${liga} ${futuro ? "futuro" : "hist"} ${error.name || "erro"}`);
     }
-  })));
+  }));
   const next = { at: now, rows: rows.slice(-6000), errors, platform: cacheKey, hours: hoursKey };
   scannerApiCache.set(`${cacheKey}|${hoursKey}`, next);
   return next;
-}
-
-async function fetchScannerApiRowsForPlatform(platform, hours) {
-  return fetchScannerApiRows(platform, hours);
-}
-
-async function fetchAllScannerApiRows(hours = "Horas3") {
-  const chunks = await Promise.all(scannerPlatforms.map(platform => fetchScannerApiRowsForPlatform(platform, hours)));
-  const rows = [];
-  const errors = [];
-  for (const chunk of chunks) {
-    rows.push(...chunk.rows);
-    errors.push(...chunk.errors.map(error => `${chunk.platform}: ${error}`));
-  }
-  return {
-    at: Date.now(),
-    rows: rows.slice(-12000),
-    errors,
-    platform: "TODAS",
-    hours: normalizeScannerHours(hours) || "Horas3"
-  };
 }
 
 async function initDb() {
@@ -388,7 +367,7 @@ app.get("/api/scanner-data", requireUserOrAdmin, async (req, res) => {
   const limit = Math.max(1, Math.min(300, Number(req.query.limit) || 120));
   const username = req.auth.type === "admin" && req.query.user ? String(req.query.user) : req.auth.username;
   const rawPlatform = String(req.query.platform || "BET365").replace(/[^a-z0-9_-]/ig, "").toUpperCase();
-  const platform = rawPlatform === "TODAS" ? "TODAS" : rawPlatform || "BET365";
+  const platform = rawPlatform === "TODAS" ? "BET365" : rawPlatform || "BET365";
   const requestedHours = normalizeScannerHours(req.query.hours);
   let telemetry = await pool.query(`
     select username, payload, created_at
@@ -417,9 +396,7 @@ app.get("/api/scanner-data", requireUserOrAdmin, async (req, res) => {
     .find(Boolean) || "Horas3";
 
   const activeHours = recentHours;
-  const finalApiData = platform === "TODAS"
-    ? await fetchAllScannerApiRows(activeHours)
-    : await fetchScannerApiRows(platform, activeHours);
+  const finalApiData = await fetchScannerApiRows(platform, activeHours);
   const latestFutureMsByLiga = new Map();
   for (const item of telemetry.rows) {
     const payload = item.payload || {};
@@ -447,7 +424,7 @@ app.get("/api/scanner-data", requireUserOrAdmin, async (req, res) => {
       const rawRowHours = normalizeScannerHours(row.hours);
       if (rawRowHoursValue && !rawRowHours) continue;
       const rowHours = rawRowHours || payloadHours || (requestedHours ? null : activeHours);
-      if (platform !== "TODAS" && rowPlatform && rowPlatform !== platform) continue;
+      if (rowPlatform && rowPlatform !== platform) continue;
       if (rowHours !== activeHours) continue;
       const resolvedLiga = Number(row.liga) || payloadLiga;
       if (!resolvedLiga || latestFutureMsByLiga.has(resolvedLiga)) continue;
@@ -460,7 +437,7 @@ app.get("/api/scanner-data", requireUserOrAdmin, async (req, res) => {
   for (const row of finalApiData.rows) {
     const rowHours = normalizeScannerHours(row.hours) || activeHours;
     if (rowHours !== activeHours) continue;
-    if (row.future && !row.score && !scannerIsFutureTime(row.time)) continue;
+    if (row.future && !row.score) continue;
     const key = scannerCanonicalKey(row, row.liga, row.platform);
     if (seen.has(key)) continue;
     seen.add(key);
@@ -487,7 +464,7 @@ app.get("/api/scanner-data", requireUserOrAdmin, async (req, res) => {
       if (!row || typeof row !== "object") continue;
       if (String(row.api || "") === "result-cache") continue;
       const rowPlatform = String(row.platform || payloadPlatform || "").toUpperCase();
-      if (platform !== "TODAS" && rowPlatform && rowPlatform !== platform) continue;
+      if (rowPlatform && rowPlatform !== platform) continue;
       const rawRowHoursValue = row.hours === undefined || row.hours === null ? "" : String(row.hours);
       const rawRowHours = normalizeScannerHours(row.hours);
       if (rawRowHoursValue && !rawRowHours) continue;

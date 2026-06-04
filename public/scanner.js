@@ -234,7 +234,7 @@ function uniqueRows(rows) {
 function isScannerFutureRow(row) {
   if (!row || !row.future || row.score) return false;
   const api = String(row.api || "");
-  return row.source === "api" || api === "dom-grid" || api === "robot-game" || api === "agent-api";
+  return api === "dom-grid" || api === "robot-game";
 }
 
 function historyRows(liga, market) {
@@ -291,12 +291,11 @@ function oddPayPct(odd, history, market) {
 }
 
 function weightedProb(lineP, team, odd) {
-  const hasSpecific = (team && Number.isFinite(team.p)) || (odd && Number.isFinite(odd.p));
-  if (!hasSpecific) return null;
   const parts = [];
   if (Number.isFinite(lineP)) parts.push({ v: lineP, w: 2 });
   if (team && Number.isFinite(team.p)) parts.push({ v: team.p, w: 5 });
   if (odd && Number.isFinite(odd.p)) parts.push({ v: odd.p, w: 5 });
+  if (!parts.length) return null;
   const sw = parts.reduce((sum, part) => sum + part.w, 0);
   return parts.reduce((sum, part) => sum + part.v * part.w, 0) / sw;
 }
@@ -325,24 +324,23 @@ function analyzeGame(row, history, line, market) {
   } else if (ev !== null && (ev < MIN_EV || edge < 3 || prob < MIN_PROB)) {
     status = "EDGE BAIXO";
     rank = 1;
-  } else if (ev !== null && ev >= 8 && edge >= 5) {
-    status = "ENTRAR";
-    rank = 3;
-  } else if (ev !== null) {
+  } else if (ev !== null && ev >= 12 && edge >= 8 && team && odd) {
     status = "OBSERVAR";
     rank = 2;
+  } else if (ev !== null) {
+    status = "AGUARDAR";
+    rank = 1;
   }
   return { row, oddValue, line480, team, odd, prob, fairOdd, edge, ev, coldOdd, status, rank };
 }
 
 function clsFor(status) {
-  if (status === "ENTRAR") return "ok";
-  if (status === "OBSERVAR" || status === "EDGE BAIXO") return "warn";
+  if (status === "OBSERVAR") return "ok";
+  if (status === "AGUARDAR" || status === "EDGE BAIXO") return "warn";
   return "bad";
 }
 
 function leagueClass(status) {
-  if (status === "ENTRAR") return "enter";
   if (status === "OBSERVAR") return "watch";
   if (status === "SEM DADOS") return "empty";
   return "block";
@@ -518,4 +516,5 @@ if (!els.platform.value) els.platform.value = "BET365";
 els.hours.value = state.hours;
 render();
 if (state.token) loadData();
-setInterval(loadData, 30000);
+const AUTO_REFRESH = false;
+if (AUTO_REFRESH) setInterval(loadData, 30000);

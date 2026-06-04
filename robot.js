@@ -11,9 +11,9 @@ document.getElementById(PANEL)?.remove();
 document.getElementById(PANEL+"-style")?.remove();
 clearInterval(window[TIMER]);
 ["BBTIPS_FINAL_ROBO_TIMER","BBTIPS_API_ALERTAS_TIMER","BBTIPS_INTERCEPTA_API_TIMER","BBTIPS_PRO_TRADER_TIMER","HB_MULTI_TIMER","BBTIPS_SCANNER_COLLECT_TIMER"].forEach(k=>{try{clearInterval(window[k])}catch(e){}});
-["bbtips-api-alertas","bbtips-intercepta-api","hb-multi","hb-tips-scanner"].forEach(id=>document.getElementById(id)?.remove());
+["bbtips-api-alertas","bbtips-intercepta-api","hb-multi","hb-tips-scanner","bbtips-robo-root","bbtips-robo-canvas","bbtips-robo-desenho","bbtips-marker-handle"].forEach(id=>document.getElementById(id)?.remove());
 
-const CONFIG={market:"over25",tol:0.8,minEV:3,minProb:52,minOddPct:45,minOddSample:30,minTeamSample:30,maxProximos:6,intervalMs:25000,windows:[120,240,480,960],ligas:[1,2,3,4,5,6],radarLigas:[1,2,3,4],ligaAuto:true,horas:"Horas3",filtros:"o15,o25,u25,ambs,ambn,o35,u15,u35,ge5,tgv5,tgc5,ftc,fte,ftv"};
+const CONFIG={market:"over25",tol:0.8,minEV:8,minProb:58,minOddPct:45,minOddSample:50,minTeamSample:50,maxProximos:4,intervalMs:180000,windows:[120,240,480,960],ligas:[1,2,3,4,5,6],radarLigas:[1,2,3,4],ligaAuto:true,autoRefresh:false,autoApi:false,alerts:false,scannerTelemetry:false,graphRobo:false,horas:"Horas3",filtros:"o15,o25,u25,ambs,ambn,o35,u15,u35,ge5,tgv5,tgc5,ftc,fte,ftv"};
 const LIGA_LABELS={1:"Copa",2:"Euro",3:"Super",4:"Premier",5:"Split",6:"Express"};
 const SCHEDULE_TIME_ZONE="Europe/London";
 let PANEL_HOVER=false;
@@ -405,8 +405,7 @@ function compactTelemetryRow(r){
     const n=Number(String(v).replace(",","."));
     if(Number.isFinite(n)&&n>1)odds[k]=Math.round(n*100)/100;
   });
-  const rawApi=String(r.api||"").slice(0,240);
-  const api=!!r.future&&!r.score&&/futebolvirtual/i.test(rawApi)?"agent-api":rawApi;
+  const api=String(r.api||"").slice(0,240);
   return {
     key:String(r.key||[r.liga||"",r.time||"",r.name||"",r.score?`${r.score.a}-${r.score.b}`:"",r.future?"f":"h"].join("|")),
     liga:r.liga??ligaFromUrl(r.api||"")??null,
@@ -508,7 +507,7 @@ function gameRowsForTelemetry(games=[]){
 function isVisibleFutureRow(r){
   if(!r||!r.future||r.score)return false;
   const api=String(r.api||"");
-  return api==="dom-grid"||api==="robot-game"||api==="agent-api"||/futebolvirtual/i.test(api);
+  return api==="dom-grid"||api==="robot-game";
 }
 function rowsForTelemetry(seed=[]){
   const by={};
@@ -540,8 +539,9 @@ function rowsForTelemetry(seed=[]){
 }
 function sendAgenteLocal(rows, opts={}){
   const now=Date.now();
+  if(!CONFIG.scannerTelemetry&&!opts.force)return;
   const force=!!opts.force;
-  if(!rows.length||(!force&&now-AGENTE_LOCAL_TS<45000))return;
+  if(!rows.length||(!force&&now-AGENTE_LOCAL_TS<120000))return;
   if(!force)AGENTE_LOCAL_TS=now;
   const hours=currentHours();
   const platform=currentPlatform();
@@ -767,8 +767,10 @@ async function carregarApiDireto(opts={}){
   const erros=[];
   const allRows=[];
   try{
-    for(const liga of CONFIG.ligas){
-      for(const futuro of [false,true]){
+    const ligaAtual=activeLiga();
+    const ligas=ligaAtual?[ligaAtual]:CONFIG.radarLigas;
+    for(const liga of ligas){
+      for(const futuro of [false]){
         const url=apiUrl(liga,futuro);
         try{
           const r=await fetch(url,{credentials:"include",cache:"no-store"});
@@ -785,6 +787,7 @@ async function carregarApiDireto(opts={}){
   }
   loadApiRows();
   refreshResultsCache();
+  if(!opts.silent)sendAgenteLocal(rowsForTelemetry(allRows),{force:true});
   if(!opts.silent)draw();
   return erros;
 }
@@ -1624,9 +1627,9 @@ function scorePullText(stat){
   return `Placar puxa apos ${stat.score}: ${stat.topScores.join(" | ")}${stat.topOdds.length?`<br>Odds: ${stat.topOdds.join(" | ")}`:""}`;
 }
 function statusPayStats(m){
-  const out={ENTRAR:{g:0,j:0,streak:0,last:""},OBSERVAR:{g:0,j:0,streak:0,last:""}};
-  out.ENTRAR.last="modo leve: auditoria pesada desligada";
+  const out={OBSERVAR:{g:0,j:0,streak:0,last:""},AGUARDAR:{g:0,j:0,streak:0,last:""}};
   out.OBSERVAR.last="modo leve: auditoria pesada desligada";
+  out.AGUARDAR.last="modo leve: auditoria pesada desligada";
   return out;
 }
 function statusStatsBox(){
@@ -1636,12 +1639,10 @@ function statusStatsBox(){
     const cls=p===null?"warn":p>=50?"ok":"bad";
     return `<tr><td>${st}</td><td>${x.g}/${x.j} ${p===null?"-":p.toFixed(1)+"%"}</td><td class="${x.streak?"bad":"ok"}">${x.streak} sem pagar</td><td class="${cls}">${esc(x.last||"sem green recente")}</td></tr>`;
   };
-  return `<table><tr><th>Status</th><th>Pagou no mercado aberto</th><th>Sequencia atual</th><th>Ultimo pagamento</th></tr>${row("ENTRAR")}${row("OBSERVAR")}</table>`;
+  return `<table><tr><th>Status</th><th>Pagou no mercado aberto</th><th>Sequencia atual</th><th>Ultimo pagamento</th></tr>${row("OBSERVAR")}${row("AGUARDAR")}</table>`;
 }
 function weightedProb(graphP,team,odd){
   const parts=[];
-  const hasSpecific=(team&&Number.isFinite(team.p))||(odd&&Number.isFinite(odd.p));
-  if(!hasSpecific)return null;
   if(Number.isFinite(graphP))parts.push({v:graphP,w:2});
   if(team&&Number.isFinite(team.p))parts.push({v:team.p,w:5});
   if(odd&&Number.isFinite(odd.p))parts.push({v:odd.p,w:5});
@@ -1684,13 +1685,14 @@ function analysisForGame(g,series){
   const strongBase=(team&&team.p>=50)||(odd&&odd.p>=50)||(!team&&!odd&&prob!==null);
   const coldOdd=odd&&odd.j>=CONFIG.minOddSample&&odd.p<CONFIG.minOddPct;
   const valueOk=evOk&&probOk;
-  if(evGale!==null&&evGale>=CONFIG.minEV&&valueOk&&!coldOdd)score=Math.max(score,70);
-  if(score<45&&valueOk&&!coldOdd)score=45;
+  const baseForte=(team&&team.j>=CONFIG.minTeamSample&&team.p>=58)||(odd&&odd.j>=CONFIG.minOddSample&&odd.p>=58);
+  if(evGale!==null&&evGale>=CONFIG.minEV&&valueOk&&baseForte&&!coldOdd)score=Math.max(score,70);
+  if(score<45&&valueOk&&baseForte&&!coldOdd)score=45;
   if(!valueOk)score=Math.min(score,44);
   if(coldOdd)score=Math.min(score,44);
-  const status=score>=70?"ENTRAR":score>=45?"OBSERVAR":"PASSAR";
-  const motivo=coldOdd?"ODD FRIA":prob===null?"SEM BASE":!evOk?"EV NEGATIVO":!probOk?"EDGE BAIXO":status;
-  return {reads,best,bestEv,team,odd,prob,fairOdd,breakEven,probEdge,ev,evGale,score:Math.round(score),status,motivo,coldOdd,valueOk};
+  const status=score>=45?"OBSERVAR":"PASSAR";
+  const motivo=coldOdd?"ODD FRIA":prob===null?"SEM BASE":!baseForte?"BASE FRACA":!evOk?"EV NEGATIVO":!probOk?"EDGE BAIXO":status;
+  return {reads,best,bestEv,team,odd,prob,fairOdd,breakEven,probEdge,ev,evGale,score:Math.round(score),status,motivo,coldOdd,valueOk,baseForte};
 }
 function analyze(){
   const games=readGridGames();
@@ -1699,7 +1701,7 @@ function analyze(){
   games.forEach(g=>{
     g.analysis=analysisForGame(g,series);
     const hits=g.analysis.reads.filter(r=>r.ready&&r.fundo&&(r.fundo30||r.fundoMin)&&Number.isFinite(r.ev));
-    const podeSinal=g.analysis.valueOk&&g.analysis.evGale!==null&&g.analysis.evGale>=CONFIG.minEV&&!g.analysis.coldOdd;
+    const podeSinal=g.analysis.valueOk&&g.analysis.baseForte&&g.analysis.evGale!==null&&g.analysis.evGale>=CONFIG.minEV&&!g.analysis.coldOdd;
     if(hits.length&&podeSinal){
       signals.push({game:g,hits,best:hits.sort((a,b)=>b.w-a.w||b.ev-a.ev)[0]});
     }
@@ -1707,6 +1709,7 @@ function analyze(){
   return {games,series,signals};
 }
 function notify(signals){
+  if(!CONFIG.alerts)return;
   let old=[];try{old=JSON.parse(localStorage.getItem(SEEN)||"[]")}catch(e){}
   const seen=new Set(old);
   signals.slice(0,5).forEach(s=>{
@@ -1721,6 +1724,7 @@ function notify(signals){
   safeSetJson(SEEN,[...seen],60);
 }
 function notifyFundo(series){
+  if(!CONFIG.alerts)return;
   const fundos=[...globalFundos(series),...visualFundos(series)];
   if(!fundos.length)return;
   let old=[];try{old=JSON.parse(localStorage.getItem(SEEN+"_FUNDO")||"[]")}catch(e){}
@@ -1739,6 +1743,7 @@ function notifyFundo(series){
   safeSetJson(SEEN+"_FUNDO",[...seen],60);
 }
 function notifyTrendUp(){
+  if(!CONFIG.alerts)return;
   const sinais=trendUpSignals();
   if(!sinais.length)return;
   let old=[];try{old=JSON.parse(localStorage.getItem(SEEN+"_TRENDUP")||"[]")}catch(e){}
@@ -1782,7 +1787,7 @@ function gamesTable(games,series){
       const tag=r.fundo30?" <30":r.fundoMin?" MINIMA":"";
       return `<span class="${cls}">${r.w}: ${r.ready?`${r.g}/${r.j} ${r.p.toFixed(1)}% min ${r.min.toFixed(1)}${tag} EV linha ${Number.isFinite(r.ev)?r.ev.toFixed(1):"-"}`:`parcial ${r.g}/${r.j} de ${r.w}`}</span>`;
     }).join("<br>");
-    const cls=an.status==="ENTRAR"?"ok":an.status==="OBSERVAR"?"warn":"bad";
+    const cls=an.status==="OBSERVAR"?"warn":"bad";
     const prob=an.prob===null?"-":`${an.prob.toFixed(1)}%`;
     const fair=an.fairOdd===null?"-":an.fairOdd.toFixed(2);
     const ev=an.ev===null?"-":`${an.ev.toFixed(1)}%`;
@@ -1857,6 +1862,10 @@ function scheduleDraw(delay=180){
   clearTimeout(DRAW_TIMER);
   DRAW_TIMER=setTimeout(()=>draw(),delay);
 }
+function manualCollectAndDraw(){
+  scheduleDraw(20);
+  setTimeout(()=>sendAgenteLocal(rowsForTelemetry(),{force:true}),120);
+}
 function refreshResultsCacheLight(force=false){
   const now=Date.now();
   if(force||!RESULTS_CACHE.length||now-LAST_RESULTS_REFRESH>90000){
@@ -1887,19 +1896,17 @@ function draw(){
   loadApiRowsLight();
   refreshResultsCacheLight(isMin?false:false);
   if(isMin){
-    sendAgenteLocal(rowsForTelemetry());
     sendResultadosAgenteLocal();
     const ligaAtual=activeLiga();
     P.innerHTML=`<div class="top"><b>BBTips Robo | ${new Date().toLocaleTimeString()} | Liga ${ligaAtual||"auto"} | Mercado ${esc(market().name)} | API ${API_ROWS.length} | Resultados ${RESULTS_CACHE.length} | modo leve</b>
     <span><button id="rb-scan">Atualizar</button><button id="rb-min">Abrir</button><button id="rb-close">Fechar</button></span></div>`;
-    document.getElementById("rb-scan").onclick=()=>scheduleDraw(20);
+    document.getElementById("rb-scan").onclick=manualCollectAndDraw;
     document.getElementById("rb-min").onclick=()=>{P.classList.remove("min");scheduleDraw(20)};
     document.getElementById("rb-close").onclick=()=>{clearInterval(window[TIMER]);P.remove()};
     window.scrollTo(oldPageX,oldPageY);
     return;
   }
   const a=analyze();
-  sendAgenteLocal(rowsForTelemetry(gameRowsForTelemetry(a.games)),{force:true});
   sendResultadosAgenteLocal();
   notify(a.signals);
   notifyFundo(a.series);
@@ -1910,7 +1917,7 @@ function draw(){
   const opts=MARKETS.map(m=>`<option value="${m.key}" ${m.key===CONFIG.market?"selected":""}>${m.name}</option>`).join("");
   P.innerHTML=`<div class="top"><b>BBTips Robo | ${new Date().toLocaleTimeString()} | Liga ${ligaAtual||"auto"} | Mercado ${esc(market().name)} | API ${API_ROWS.length} | Resultados ${RESULTS_CACHE.length} | Proximos ${a.games.length} | Sinais ${a.signals.length}${fundoTxt}</b>
   <span>Mercado <select id="rb-market">${opts}</select> EV real+ <input id="rb-ev" value="${CONFIG.minEV}"> Prob <input id="rb-prob" value="${CONFIG.minProb}"> OddFria% <input id="rb-cold" value="${CONFIG.minOddPct}"> Prox <input id="rb-maxprox" value="${CONFIG.maxProximos}"> Tol <input id="rb-tol" value="${CONFIG.tol}">
-  <button id="rb-api">Agente API</button><button id="rb-hist">Historico</button><button id="rb-scan">Atualizar</button><button id="rb-som">Som</button><button id="rb-min">Minimizar</button><button id="rb-close">Fechar</button></span></div>
+  <button id="rb-api">Atualizar API</button><button id="rb-hist">Historico</button><button id="rb-scan">Atualizar</button><button id="rb-som">Som</button><button id="rb-min">Minimizar</button><button id="rb-close">Fechar</button></span></div>
   <div class="body">
     ${multiLeagueRadarBox()}
     <h3>Proximos jogos da liga atual</h3>${trendUpBox()}${marketRankingBox()}${gamesTable(a.games,a.series)}
@@ -1927,7 +1934,7 @@ function draw(){
   document.getElementById("rb-tol").onchange=e=>{CONFIG.tol=Number(e.target.value)||0.8;scheduleDraw()};
   document.getElementById("rb-api").onclick=()=>carregarApiDireto();
   document.getElementById("rb-hist").onclick=()=>exportHistory();
-  document.getElementById("rb-scan").onclick=()=>scheduleDraw(20);
+  document.getElementById("rb-scan").onclick=manualCollectAndDraw;
   document.getElementById("rb-som").onclick=beep;
   document.getElementById("rb-min").onclick=()=>P.classList.toggle("min");
   document.getElementById("rb-close").onclick=()=>{clearInterval(window[TIMER]);P.remove()};
@@ -1943,13 +1950,16 @@ function draw(){
   }
 }
 draw();
-window[TIMER]=setInterval(()=>scheduleDraw(20),CONFIG.intervalMs);
-setTimeout(()=>carregarApiDireto({silent:true}).catch(()=>{}),5000);
-window.BBTIPS_SCANNER_COLLECT_TIMER=setInterval(()=>carregarApiDireto({silent:true}).catch(()=>{}),120000);
+if(CONFIG.autoRefresh)window[TIMER]=setInterval(()=>scheduleDraw(20),CONFIG.intervalMs);
+if(CONFIG.autoApi){
+  setTimeout(()=>carregarApiDireto({silent:true}).catch(()=>{}),5000);
+  window.BBTIPS_SCANNER_COLLECT_TIMER=setInterval(()=>carregarApiDireto({silent:true}).catch(()=>{}),120000);
+}
 window.BBTipsRobo={analyze,config:CONFIG,exportar:exportHistory,historico:loadStoredResults};
 })();
 
 ;(()=>{
+  try{if(!window.BBTipsRobo?.config?.graphRobo)return;}catch(e){return;}
   if(window.__BBTIPS_GRAPH_ROBO_INLINE)return;
   window.__BBTIPS_GRAPH_ROBO_INLINE=true;
 (function () {

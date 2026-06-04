@@ -77,6 +77,7 @@ function removeRobotPanel() {
       clearInterval(window.BBTIPS_API_ALERTAS_TIMER);
       clearInterval(window.BBTIPS_INTERCEPTA_API_TIMER);
       clearInterval(window.BBTIPS_PRO_TRADER_TIMER);
+      clearInterval(window.BBTIPS_SCANNER_COLLECT_TIMER);
       clearInterval(window.HB_MULTI_TIMER);
       document.getElementById('bbtips-final-robo')?.remove();
       document.getElementById('bbtips-final-robo-style')?.remove();
@@ -125,7 +126,7 @@ function startRemoteCheck() {
   if (CHECK_TIMER) clearInterval(CHECK_TIMER);
   CHECK_TIMER = setInterval(async () => {
     await checkLicenseOnce();
-  }, 3000);
+  }, 60000);
 }
 
 chrome.storage.local.get(["bbtips_active"], async (res) => {
