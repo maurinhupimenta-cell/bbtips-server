@@ -139,13 +139,6 @@ function scannerParseTime(value) {
   return h >= 0 && h < 24 && m >= 0 && m < 60 ? h * 60 + m : null;
 }
 
-function scannerFormatTime(minute) {
-  const normalized = ((minute % 1440) + 1440) % 1440;
-  const h = Math.floor(normalized / 60);
-  const m = normalized % 60;
-  return `${h}.${String(m).padStart(2, "0")}`;
-}
-
 function scannerScheduleNowMinute() {
   try {
     const parts = new Intl.DateTimeFormat("en-GB", {
@@ -213,6 +206,18 @@ function scannerMergeOdds(primary, fallback) {
   };
 }
 
+function scannerLooksLikeOddTime(row) {
+  const parsed = scannerParseTime(row?.time);
+  if (parsed === null) return false;
+  const rawTime = Number(String(row.time).replace(":", "."));
+  if (!Number.isFinite(rawTime)) return false;
+  const odds = parseScannerOdds(row?.odds || {});
+  return Object.values(odds).some(value => {
+    const n = Number(String(value).replace(",", "."));
+    return Number.isFinite(n) && n.toFixed(2) === rawTime.toFixed(2);
+  });
+}
+
 function scannerVisibleFutureSource(row) {
   const api = String(row?.api || "");
   return api === "dom-grid" || api === "robot-game";
@@ -245,28 +250,6 @@ function collectScannerOdds(obj, out = {}) {
     if (obj[name] !== undefined) collectScannerOdds(obj[name], out);
   });
   return out;
-}
-
-function scannerRepairLikelyOddTime(row) {
-  const parsed = scannerParseTime(row?.time);
-  if (parsed === null) return row;
-  const rawTime = Number(String(row.time).replace(":", "."));
-  if (!Number.isFinite(rawTime)) return row;
-  const odds = parseScannerOdds(row?.odds || {});
-  const timeLooksLikeOdd = Object.values(odds).some(value => {
-    const n = Number(String(value).replace(",", "."));
-    return Number.isFinite(n) && n.toFixed(2) === rawTime.toFixed(2);
-  });
-  if (!timeLooksLikeOdd) return row;
-  const targetMinute = parsed % 60;
-  const now = scannerScheduleNowMinute();
-  for (let add = 0; add <= 720; add += 1) {
-    const candidate = (now + add) % 1440;
-    if (candidate % 60 === targetMinute) {
-      return { ...row, time: scannerFormatTime(candidate), repairedTimeFrom: row.time };
-    }
-  }
-  return row;
 }
 
 function flattenScannerApi(json, url, liga) {
@@ -474,8 +457,10 @@ app.get("/api/scanner-data", requireUserOrAdmin, async (req, res) => {
     const payloadLiga = Number(payload.liga) || majorityLiga;
     for (const row of payloadRows) {
       if (!row || typeof row !== "object" || row.score || !row.future) continue;
-      const fixedRow = scannerRepairLikelyOddTime(row);
+      const fixedRow = scannerLooksLikeOddTime(row) ? null : row;
+      if (!fixedRow) continue;
       if (!scannerVisibleFutureSource(fixedRow)) continue;
+      if (scannerParseTime(fixedRow.time) === null) continue;
       if (!scannerIsFutureTime(fixedRow.time)) continue;
       const rowPlatform = String(fixedRow.platform || payloadPlatform || "").toUpperCase();
       const rawRowHoursValue = fixedRow.hours === undefined || fixedRow.hours === null ? "" : String(fixedRow.hours);
@@ -521,7 +506,8 @@ app.get("/api/scanner-data", requireUserOrAdmin, async (req, res) => {
     for (const row of payloadRows) {
       if (!row || typeof row !== "object") continue;
       if (String(row.api || "") === "result-cache") continue;
-      const fixedRow = row.future && !row.score ? scannerRepairLikelyOddTime(row) : row;
+      const fixedRow = row.future && !row.score && scannerLooksLikeOddTime(row) ? null : row;
+      if (!fixedRow) continue;
       const rowPlatform = String(fixedRow.platform || payloadPlatform || "").toUpperCase();
       if (rowPlatform && rowPlatform !== platform) continue;
       const rawRowHoursValue = fixedRow.hours === undefined || fixedRow.hours === null ? "" : String(fixedRow.hours);
@@ -533,6 +519,7 @@ app.get("/api/scanner-data", requireUserOrAdmin, async (req, res) => {
       if (!resolvedLiga) continue;
       if (fixedRow.future && !fixedRow.score) {
         if (!scannerVisibleFutureSource(fixedRow)) continue;
+        if (scannerParseTime(fixedRow.time) === null) continue;
         if (!scannerIsFutureTime(fixedRow.time)) continue;
         const latestFutureMs = latestFutureMsByLiga.get(resolvedLiga);
         if (!latestFutureMs || new Date(item.created_at).getTime() !== latestFutureMs) continue;

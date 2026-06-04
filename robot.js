@@ -281,7 +281,7 @@ function readVisibleGameRows(anchor=null, seen=new Set()){
     const name=gameName(txt);
     if(!name||name.length<5)return;
     const time=timeFromGameText(txt);
-    if(time&&!isScheduleFuture(time,anchor))return;
+    if(!time||!isScheduleFuture(time,anchor))return;
     const key=["dom-visible",platform,liga||"auto",time||"sem-hora",name].join("|");
     if(seen.has(key))return;
     seen.add(key);

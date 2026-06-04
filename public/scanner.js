@@ -246,6 +246,7 @@ function historyRows(liga, market) {
 function upcomingRows(liga, market) {
   return uniqueRows(state.rows)
     .filter(row => Number(row.liga) === Number(liga) && isScannerFutureRow(row) && (row.name || row.time) && isFutureTime(row.time))
+    .filter(row => parseTime(row.time) !== null)
     .filter(row => oddsForMarket(row, market).some(value => Number.isFinite(value) && value > 1))
     .sort((a, b) => futureDistance(a) - futureDistance(b))
     .slice(0, 6);
