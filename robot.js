@@ -13,7 +13,7 @@ clearInterval(window[TIMER]);
 ["BBTIPS_FINAL_ROBO_TIMER","BBTIPS_API_ALERTAS_TIMER","BBTIPS_INTERCEPTA_API_TIMER","BBTIPS_PRO_TRADER_TIMER","HB_MULTI_TIMER","BBTIPS_SCANNER_COLLECT_TIMER"].forEach(k=>{try{clearInterval(window[k])}catch(e){}});
 ["bbtips-api-alertas","bbtips-intercepta-api","hb-multi","hb-tips-scanner","bbtips-robo-root","bbtips-robo-canvas","bbtips-robo-desenho","bbtips-marker-handle"].forEach(id=>document.getElementById(id)?.remove());
 
-const CONFIG={market:"over25",tol:0.8,minEV:5,minEdge:3,minProb:0,minOddPct:45,minRealPct:50,minOddSample:12,minTeamSample:12,maxProximos:4,intervalMs:180000,windows:[120,240,480,960],ligas:[1,2,3,4,5,6],radarLigas:[1,2,3,4],ligaAuto:true,autoRefresh:false,autoApi:false,alerts:true,scannerTelemetry:false,graphRobo:true,horas:"Horas3",filtros:"o15,o25,u25,ambs,ambn,o35,u15,u35,ge5,tgv5,tgc5,ftc,fte,ftv"};
+const CONFIG={market:"over25",tol:0.8,minEV:5,minEdge:3,minProb:0,minOddPct:45,minRealPct:50,minEntryProb:50,minScoreSample:30,minAntecedentSample:8,minRefSample:12,minOddSample:12,minTeamSample:8,maxProximos:4,intervalMs:180000,windows:[120,240,480,960],ligas:[1,2,3,4,5,6],radarLigas:[1,2,3,4],ligaAuto:true,autoRefresh:false,autoApi:false,alerts:true,scannerTelemetry:false,graphRobo:true,horas:"Horas3",filtros:"o15,o25,u25,ambs,ambn,o35,u15,u35,ge5,tgv5,tgc5,ftc,fte,ftv"};
 const LIGA_LABELS={1:"Copa",2:"Euro",3:"Super",4:"Premier",5:"Split",6:"Express"};
 const SCHEDULE_TIME_ZONE="Europe/London";
 let PANEL_HOVER=false;
@@ -1616,15 +1616,23 @@ function oddBand(v){
 }
 function scoreModelForGame(game,m){
   const names=teamNames(game.name);
-  const band=oddBand(game.odd);
+  const exactOdd=Number.isFinite(game.odd)?game.odd:null;
   let rows=orderedResults().filter(r=>{
     const p=teamNames(r.name);
     const hasTeam=names.some(n=>p.includes(n));
     const odds=oddsForMarket(r.txt,m);
-    const sameBand=band&&odds.some(o=>oddBand(o)===band);
-    return hasTeam||sameBand;
+    const sameOdd=exactOdd!==null&&odds.some(o=>Math.abs(o-exactOdd)<=0.001);
+    return hasTeam||sameOdd;
   }).slice(0,80);
-  let label=`times/faixa ${band||"-"}`;
+  let label="liga recente";
+  if(rows.length){
+    const exactCount=rows.filter(r=>exactOdd!==null&&oddsForMarket(r.txt,m).some(o=>Math.abs(o-exactOdd)<=0.001)).length;
+    const teamCount=rows.filter(r=>{
+      const p=teamNames(r.name);
+      return names.some(n=>p.includes(n));
+    }).length;
+    label=exactCount&&teamCount?`times/odd exata @${exactOdd.toFixed(2)}`:exactCount?`odd exata @${exactOdd.toFixed(2)}`:"times";
+  }
   if(!rows.length){
     rows=resultHistoryForMarket(m).slice(0,80).map(x=>x.r||x).filter(r=>r&&r.score);
     label="liga recente";
@@ -1652,6 +1660,99 @@ function scorePullText(stat){
   if(stat.label)return `Placar correto (${esc(stat.label)}, ${stat.j} jogos): ${stat.topScores.join(" | ")}<br>Mercado nessa base: ${stat.green}/${stat.j} ${Number.isFinite(stat.marketP)?stat.marketP.toFixed(1)+"%":"-"}${stat.topOdds.length?` | Odds: ${stat.topOdds.join(" | ")}`:""}`;
   return `Placar correto apos ${stat.score}: ${stat.topScores.join(" | ")}${stat.topOdds.length?`<br>Odds: ${stat.topOdds.join(" | ")}`:""}`;
 }
+function antecedentModelForGame(game,m){
+  const rows=orderedResults();
+  const last=rows.at(-1);
+  if(!last||rows.length<12)return {label:"sem anterior",g:0,j:0,p:null,topScores:[]};
+  const lastScore=scoreKey(last.score);
+  const lastOdd=oddsForMarket(last.txt,m)[0]||null;
+  const build=mode=>{
+    const pairs=[];
+    for(let i=0;i<rows.length-1;i++){
+      const before=rows[i],after=rows[i+1];
+      if(!before?.score||!after?.score)continue;
+      const beforeOdd=oddsForMarket(before.txt,m)[0]||null;
+      const sameScore=scoreKey(before.score)===lastScore;
+      const sameOdd=Number.isFinite(lastOdd)&&Number.isFinite(beforeOdd)&&Math.abs(beforeOdd-lastOdd)<=0.001;
+      if(mode==="score+odd"&&sameScore&&sameOdd)pairs.push({before,after});
+      if(mode==="score"&&sameScore)pairs.push({before,after});
+      if(mode==="odd"&&sameOdd)pairs.push({before,after});
+    }
+    return pairs.slice(-80);
+  };
+  let mode="score+odd",pairs=build(mode);
+  if(pairs.length<CONFIG.minAntecedentSample){mode="score";pairs=build(mode)}
+  if(pairs.length<CONFIG.minAntecedentSample){mode="odd";pairs=build(mode)}
+  if(!pairs.length)return {label:`anterior ${lastScore}`,g:0,j:0,p:null,topScores:[]};
+  const g=pairs.filter(x=>paysMarket(x.after.score,m)).length;
+  const counts={};
+  pairs.forEach(x=>{
+    const sk=scoreKey(x.after.score);
+    counts[sk]=(counts[sk]||0)+1;
+  });
+  const topScores=Object.entries(counts).sort((a,b)=>b[1]-a[1]).slice(0,2).map(([k,v])=>`${k} ${v}/${pairs.length} ${(v/pairs.length*100).toFixed(1)}%`);
+  const oddTxt=Number.isFinite(lastOdd)?` @${lastOdd.toFixed(2)}`:"";
+  return {label:`anterior ${lastScore}${oddTxt} (${mode})`,g,j:pairs.length,p:g/pairs.length*100,topScores};
+}
+function exactOddKey(value){
+  const n=Number(value);
+  return Number.isFinite(n)?n.toFixed(2):"";
+}
+function rowMarketOddKey(row,m){
+  return exactOddKey(oddsForMarket(row?.txt||"",m)[0]);
+}
+function referenceAuditForGame(game,m){
+  const rows=orderedResults();
+  const last=rows.at(-1);
+  const futureOdd=exactOddKey(game.odd);
+  if(!last||rows.length<CONFIG.minRefSample+2||!futureOdd)return {pass:false,label:"sem referencia",g:0,j:0,p:null,roi:null,why:"sem base"};
+  const lastScore=scoreKey(last.score);
+  const lastOdd=rowMarketOddKey(last,m);
+  const futureHour=hourOf(game.time);
+  const candidates=[
+    {
+      label:`anterior ${lastScore} + odd exata ${futureOdd}`,
+      test:(before,after)=>scoreKey(before.score)===lastScore&&rowMarketOddKey(after,m)===futureOdd
+    },
+    {
+      label:`odd anterior ${lastOdd||"-"} + odd exata ${futureOdd}`,
+      test:(before,after)=>lastOdd&&rowMarketOddKey(before,m)===lastOdd&&rowMarketOddKey(after,m)===futureOdd
+    },
+    {
+      label:`odd exata ${futureOdd}`,
+      test:(_before,after)=>rowMarketOddKey(after,m)===futureOdd
+    },
+    {
+      label:`anterior ${lastScore}`,
+      test:(before)=>scoreKey(before.score)===lastScore
+    },
+    {
+      label:`hora ${futureHour===null?"-":String(futureHour).padStart(2,"0")} + odd ${futureOdd}`,
+      test:(_before,after)=>futureHour!==null&&hourOf(after.time)===futureHour&&rowMarketOddKey(after,m)===futureOdd
+    }
+  ];
+  const evalRule=rule=>{
+    const pairs=[];
+    for(let i=0;i<rows.length-1;i++){
+      const before=rows[i],after=rows[i+1];
+      if(!before?.score||!after?.score)continue;
+      if(rule.test(before,after))pairs.push({before,after});
+    }
+    const sample=pairs.slice(-80);
+    const g=sample.filter(x=>paysMarket(x.after.score,m)).length;
+    const p=sample.length?g/sample.length*100:null;
+    const recent=sample.slice(-Math.min(12,sample.length));
+    const rg=recent.filter(x=>paysMarket(x.after.score,m)).length;
+    const rp=recent.length?rg/recent.length*100:null;
+    const roi=Number.isFinite(p)?(p/100*Number(game.odd)-1)*100:null;
+    const pass=sample.length>=CONFIG.minRefSample&&Number.isFinite(p)&&p>=CONFIG.minRealPct&&Number.isFinite(rp)&&rp>=CONFIG.minRealPct&&Number.isFinite(roi)&&roi>=CONFIG.minEV;
+    return {pass,label:rule.label,g,j:sample.length,p,rg,rj:recent.length,rp,roi};
+  };
+  const results=candidates.map(evalRule).sort((a,b)=>Number(b.pass)-Number(a.pass)||(b.roi??-999)-(a.roi??-999)||(b.p??-999)-(a.p??-999)||b.j-a.j);
+  const best=results[0]||{pass:false,label:"sem referencia",g:0,j:0,p:null,roi:null};
+  const why=best.pass?"regra testada":best.j<CONFIG.minRefSample?"amostra baixa":!Number.isFinite(best.p)||best.p<CONFIG.minRealPct?"abaixo de 50%":!Number.isFinite(best.rp)||best.rp<CONFIG.minRealPct?"recente abaixo de 50%":"ROI baixo";
+  return {...best,why};
+}
 function statusPayStats(m){
   const out={OBSERVAR:{g:0,j:0,streak:0,last:""},AGUARDAR:{g:0,j:0,streak:0,last:""}};
   out.OBSERVAR.last="modo leve: auditoria pesada desligada";
@@ -1676,6 +1777,33 @@ function weightedProb(graphP,team,odd){
   const sw=parts.reduce((a,b)=>a+b.w,0);
   return parts.reduce((a,b)=>a+b.v*b.w,0)/sw;
 }
+function confidenceGateForGame({oddValue,team,odd,scoreModel,antecedent,audit,prob,probEdge,ev,coldOdd}){
+  const oddOk=Boolean(odd&&odd.j>=CONFIG.minOddSample&&Number.isFinite(odd.p)&&odd.p>=CONFIG.minRealPct);
+  const teamOk=Boolean(team&&team.j>=CONFIG.minTeamSample&&Number.isFinite(team.p)&&team.p>=CONFIG.minRealPct);
+  const scoreOk=Boolean(scoreModel&&scoreModel.j>=CONFIG.minScoreSample&&Number.isFinite(scoreModel.marketP)&&scoreModel.marketP>=CONFIG.minRealPct);
+  const antecedentOk=Boolean(antecedent&&antecedent.j>=CONFIG.minAntecedentSample&&Number.isFinite(antecedent.p)&&antecedent.p>=CONFIG.minRealPct);
+  const valueOk=Number.isFinite(ev)&&ev>=CONFIG.minEV&&Number.isFinite(probEdge)&&probEdge>=CONFIG.minEdge;
+  const probOk=Number.isFinite(prob)&&prob>=CONFIG.minEntryProb;
+  const hasConfirm=teamOk||scoreOk||antecedentOk;
+  const iaEntryOk=Boolean(audit?.pass&&oddValue&&!coldOdd);
+  let reason="SEM CONFLUENCIA";
+  if(!oddValue)reason="SEM ODD";
+  else if(!audit?.pass)reason=audit?.why||"SEM PADRAO TESTADO";
+  else if(!oddOk)reason="ODD SEM BASE 50";
+  else if(coldOdd)reason="ODD FRIA";
+  else if(!valueOk)reason=ev!==null&&ev<0?"EV NEGATIVO":"EDGE BAIXO";
+  else if(!probOk)reason="PROB <50";
+  else if(!hasConfirm)reason="SEM CONFLUENCIA";
+  else if(iaEntryOk)reason="REGRA TESTADA";
+  const confidence=Math.round(
+    Math.min(35,Math.max(0,(prob||0)-40))+
+    Math.min(25,Math.max(0,(odd?.p||0)-45))+
+    Math.min(20,Math.max(0,(team?.p||0)-45))+
+    Math.min(20,Math.max(0,(scoreModel?.marketP||0)-45))+
+    Math.min(20,Math.max(0,(antecedent?.p||0)-45))
+  );
+  return {oddOk,teamOk,scoreOk,antecedentOk,auditOk:!!audit?.pass,valueOk,probOk,hasConfirm,iaEntryOk,reason,confidence};
+}
 function analysisForGame(g,series){
   const resultReads=calcResultWindows(g.market).map(r=>({
     ...r,
@@ -1691,6 +1819,9 @@ function analysisForGame(g,series){
   const bestEv=evs.length?Math.max(...evs.map(r=>r.ev)):null;
   const team=teamPayPct(g,g.market);
   const odd=oddPayPct(g,g.market);
+  const scoreModel=scoreModelForGame(g,g.market);
+  const antecedent=antecedentModelForGame(g,g.market);
+  const audit=referenceAuditForGame(g,g.market);
   const graphP=best?.ready?best.p:null;
   const prob=weightedProb(graphP,team,odd);
   const fairOdd=prob?100/prob:null;
@@ -1722,15 +1853,16 @@ function analysisForGame(g,series){
   ].filter(Boolean);
   const bestRealBase=realBases.sort((a,b)=>b.p-a.p||b.j-a.j)[0]||null;
   const realBaseOk=Boolean(bestRealBase&&bestRealBase.p>=CONFIG.minRealPct);
-  if(!realBaseOk)score=Math.min(score,44);
-  const status=valueOk&&baseForte&&realBaseOk&&!coldOdd?"OBSERVAR":"PASSAR";
-  const motivo=!bestRealBase?"SEM BASE REAL":!realBaseOk?"BASE <50":coldOdd?"ODD FRIA":prob===null?"SEM PROB":!evOk?"EV NEGATIVO":!probOk?"EDGE BAIXO":status;
-  return {reads,best,bestEv,team,odd,bestRealBase,realBaseOk,prob,fairOdd,breakEven,probEdge,ev,evGale,score:Math.round(score),status,motivo,coldOdd,valueOk,baseForte};
+  const gate=confidenceGateForGame({oddValue:g.odd,team,odd,scoreModel,antecedent,audit,prob,probEdge,ev,coldOdd});
+  if(!realBaseOk||!gate.iaEntryOk)score=Math.min(score,44);
+  const status=gate.iaEntryOk?"ENTRADA TESTADA":"SEM PADRAO";
+  const motivo=gate.iaEntryOk?"ENTRADA TESTADA":gate.reason;
+  return {reads,best,bestEv,team,odd,scoreModel,antecedent,audit,bestRealBase,realBaseOk,gate,prob,fairOdd,breakEven,probEdge,ev,evGale,score:Math.round(score),status,motivo,coldOdd,valueOk,baseForte};
 }
 function sweepScore(item){
   const an=item.an||{};
   const base=Math.max(an.team?.j||0,an.odd?.j||0);
-  return (an.valueOk&&!an.coldOdd?80:0)+(an.baseForte?30:0)+Math.max(0,an.ev||0)+Math.min(25,base)+(an.score||0);
+  return (an.gate?.iaEntryOk?600:0)+(an.gate?.confidence||0)+Math.max(0,an.ev||0)+Math.min(25,base);
 }
 function marketSweepForGame(g,series){
   const out=[];
@@ -1741,17 +1873,26 @@ function marketSweepForGame(g,series){
     const an=analysisForGame(probe,series);
     out.push({market:m,odd,an,score:sweepScore({market:m,odd,an})});
   });
-  return out.sort((a,b)=>b.score-a.score||((b.an.ev??-999)-(a.an.ev??-999))).slice(0,4);
+  return out.sort((a,b)=>b.score-a.score||((b.an.ev??-999)-(a.an.ev??-999))).slice(0,3);
 }
-function marketSweepText(g,series){
+function bestMarketPickForGame(g,series){
   const sweep=marketSweepForGame(g,series);
-  if(!sweep.length)return "Agente IA odds: sem odds extras lidas";
-  return "Agente IA odds:<br>"+sweep.map(item=>{
-    const cls=item.an.valueOk&&!item.an.coldOdd?"ok":item.an.ev!==null&&item.an.ev>=0?"warn":"bad";
-    const ev=item.an.ev===null?"-":`${item.an.ev.toFixed(1)}%`;
-    const prob=item.an.prob===null?"-":`${item.an.prob.toFixed(1)}%`;
-    return `<span class="${cls}">${esc(item.market.name)}</span> @${item.odd.toFixed(2)} ${esc(item.an.motivo)} | Prob ${prob} | EV ${ev} | Times ${fmtBaseStat(item.an.team)} | Odd ${fmtBaseStat(item.an.odd)}`;
-  }).join("<br>");
+  return sweep[0]||{market:g.market,odd:g.odd,an:g.analysis||analysisForGame(g,series),score:0};
+}
+function compactScoreModelText(stat){
+  if(!stat||!stat.j)return "Placar: 0/0 -";
+  const top=(stat.topScores||[]).slice(0,2).join(" | ");
+  return `Placar: ${stat.green}/${stat.j} ${Number.isFinite(stat.marketP)?stat.marketP.toFixed(1)+"%":"-"}${top?` | ${top}`:""}`;
+}
+function decisionIaText(pick){
+  const an=pick.an||{};
+  const cls=an.gate?.iaEntryOk?"ok":"bad";
+  const decisao=an.gate?.iaEntryOk?"ENTRADA TESTADA":"SEM PADRAO";
+  const audit=an.audit||{};
+  const auditPct=Number.isFinite(audit.p)?`${audit.p.toFixed(1)}%`:"-";
+  const auditRecent=Number.isFinite(audit.rp)?`${audit.rg}/${audit.rj} ${audit.rp.toFixed(1)}%`:"-";
+  const roi=Number.isFinite(audit.roi)?`${audit.roi.toFixed(1)}%`:"-";
+  return `<b class="${cls}">${decisao}</b> ${esc(pick.market.name)} @${pick.odd.toFixed(2)}<br>Referencia: ${esc(audit.label||"sem referencia")}<br>Teste: ${audit.g||0}/${audit.j||0} ${auditPct} | recente ${auditRecent} | ROI ${roi}<br>Motivo: ${esc(an.gate?.reason||an.motivo||"-")}`;
 }
 function analyze(){
   const games=readGridGames();
@@ -1840,28 +1981,20 @@ function oneXTwoOddsText(g){
 function gamesTable(games,series){
   if(!games.length)return "<p class='bad'>Nao achei proximos jogos com odd deste mercado. Clique API ou escolha um mercado que aparece nas odds dos proximos jogos.</p>";
   return `<table><tr><th>Horario</th><th>Jogo</th><th>Mercado</th><th>Odd</th><th>Status</th><th>Probabilidade</th><th>Times/Odd pagante</th><th>Linha 120/240/480/960</th></tr>${games.map(g=>{
-    const an=g.analysis||analysisForGame(g,series);
-    const reads=an.reads.map(r=>{
+    const pick=bestMarketPickForGame(g,series);
+    const an=pick.an||analysisForGame(g,series);
+    const mainRead=an.reads.find(r=>r.w===480)||an.reads.find(r=>r.ready)||an.reads[0];
+    const reads=mainRead?(()=>{
+      const r=mainRead;
       const cls=(r.fundo30||r.fundoMin)?"ok":r.ready?"warn":"bad";
       const tag=r.fundo30?" <30":r.fundoMin?" MINIMA":"";
-      return `<span class="${cls}">${r.w}: ${r.ready?`${r.g}/${r.j} ${r.p.toFixed(1)}% min ${r.min.toFixed(1)}${tag} EV linha ${Number.isFinite(r.ev)?r.ev.toFixed(1):"-"}`:`parcial ${r.g}/${r.j} de ${r.w}`}</span>`;
-    }).join("<br>");
-    const cls=an.status==="OBSERVAR"?"warn":"bad";
-    const prob=an.prob===null?"-":`${an.prob.toFixed(1)}%`;
-    const fair=an.fairOdd===null?"-":an.fairOdd.toFixed(2);
-    const ev=an.ev===null?"-":`${an.ev.toFixed(1)}%`;
-    const edge=an.probEdge===null?"-":`${an.probEdge.toFixed(1)}%`;
-    const evG=an.evGale===null?"-":`${an.evGale.toFixed(1)}%`;
+      return `<span class="${cls}">${r.w}: ${r.ready?`${r.g}/${r.j} ${r.p.toFixed(1)}% min ${r.min.toFixed(1)}${tag} EV ${Number.isFinite(r.ev)?r.ev.toFixed(1):"-"}`:`parcial ${r.g}/${r.j} de ${r.w}`}</span>`;
+    })():"-";
+    const cls=an.gate?.iaEntryOk?"ok":"bad";
     const team=fmtBaseStat(an.team);
     const odd=`${fmtBaseStat(an.odd)}${an.coldOdd?" ODD FRIA":""}`;
-    const ciclo=cycleText(marketCycleStats(g.market));
-    const oddFixa=exactOddText(exactOddStats(g,g.market));
-    const horario=hourStatsText(hourStatsForGame(g,g.market));
-    const liga=ligaStatsText(g.market);
-    const detalhe=teamDetailText(g,g.market);
-    const placar=scorePullText(scoreModelForGame(g,g.market));
-    const agente=marketSweepText(g,series);
-    return `<tr><td>${esc(g.time)}</td><td>${esc(g.name)}</td><td>${esc(g.market.name)}</td><td>${g.odd.toFixed(2)}</td><td class="${cls}">${esc(an.motivo)}<br>Score ${an.score}</td><td>Prob calibrada ${prob}<br>Odd justa ${fair}<br>Edge odd ${edge}<br>EV real ${ev}<br>EV gale ${evG}<br>${placar}<br>${agente}<br>${ciclo}<br>${oddFixa}<br>${horario}<br>${liga}</td><td>Times geral: ${team}<br>${oneXTwoOddsText(g)}<br>${detalhe}<br>Odd atual @${g.odd.toFixed(2)} ${odd}</td><td>${reads}</td></tr>`;
+    const changed=pick.market.key!==g.market.key?`<br><span class="warn">melhor mercado lido pela IA</span>`:"";
+    return `<tr><td>${esc(g.time)}</td><td>${esc(g.name)}</td><td>${esc(pick.market.name)}${changed}</td><td>${pick.odd.toFixed(2)}</td><td class="${cls}">${esc(an.motivo)}<br>Conf ${an.gate?.confidence??0}</td><td>${decisionIaText(pick)}</td><td>Times: ${team}<br>Odd exata: ${odd}<br>${oneXTwoOddsText(g)}</td><td>${reads}</td></tr>`;
   }).join("")}</table>`;
 }
 function signalsBox(signals){

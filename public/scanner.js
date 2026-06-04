@@ -5,6 +5,9 @@ const MIN_EV = 5;
 const MIN_EDGE = 3;
 const MIN_ODD_PCT = 45;
 const MIN_REAL_PCT = 50;
+const MIN_TEAM_SAMPLE = 8;
+const MIN_SCORE_SAMPLE = 30;
+const MIN_ENTRY_PROB = 50;
 
 const LIGAS = [
   [6, "Express"],
@@ -314,12 +317,12 @@ function oddBand(value) {
 
 function scoreModelForGame(game, history, market, oddValue) {
   const names = teamNames(game.name);
-  const band = oddBand(oddValue);
+  const exactOdd = Number.isFinite(oddValue) ? oddValue : null;
   const scoped = history.filter(row => {
     const text = String(row.name || row.txt || "").toLowerCase();
     const hasTeam = names.some(name => text.includes(name));
-    const sameBand = band && oddsForMarket(row, market).some(value => oddBand(value) === band);
-    return hasTeam || sameBand;
+    const sameOdd = exactOdd !== null && oddsForMarket(row, market).some(value => Math.abs(value - exactOdd) <= 0.001);
+    return hasTeam || sameOdd;
   }).slice(0, 120);
   const rows = scoped.length ? scoped : history.slice(0, 120);
   if (!rows.length) return { label: "liga recente", j: 0, top: [], marketG: 0, marketP: null };
@@ -333,8 +336,17 @@ function scoreModelForGame(game, history, market, oddValue) {
     .slice(0, 4)
     .map(([score, count]) => ({ score, count, p: count / rows.length * 100 }));
   const marketG = rows.filter(row => market.pays(row.score)).length;
+  let label = "liga recente";
+  if (scoped.length) {
+    const exactCount = rows.filter(row => exactOdd !== null && oddsForMarket(row, market).some(value => Math.abs(value - exactOdd) <= 0.001)).length;
+    const teamCount = rows.filter(row => {
+      const text = String(row.name || row.txt || "").toLowerCase();
+      return names.some(name => text.includes(name));
+    }).length;
+    label = exactCount && teamCount ? `times/odd exata @${exactOdd.toFixed(2)}` : exactCount ? `odd exata @${exactOdd.toFixed(2)}` : "times";
+  }
   return {
-    label: scoped.length ? `times/faixa ${band || "-"}` : "liga recente",
+    label,
     j: rows.length,
     top,
     marketG,
@@ -358,6 +370,35 @@ function weightedProb(lineP, team, odd) {
   return parts.reduce((sum, part) => sum + part.v * part.w, 0) / sw;
 }
 
+function confidenceGate({ oddValue, team, odd, scoreModel, prob, edge, ev, coldOdd }) {
+  const oddOk = Boolean(odd && odd.j >= MIN_SAMPLE && Number.isFinite(odd.p) && odd.p >= MIN_REAL_PCT);
+  const teamOk = Boolean(team && team.j >= MIN_TEAM_SAMPLE && Number.isFinite(team.p) && team.p >= MIN_REAL_PCT);
+  const scoreOk = Boolean(scoreModel && scoreModel.j >= MIN_SCORE_SAMPLE && Number.isFinite(scoreModel.marketP) && scoreModel.marketP >= MIN_REAL_PCT);
+  const valueOk = Number.isFinite(ev) && ev >= MIN_EV && Number.isFinite(edge) && edge >= MIN_EDGE;
+  const probOk = Number.isFinite(prob) && prob >= MIN_ENTRY_PROB;
+  const hasConfirm = teamOk || scoreOk;
+  const iaEntryOk = Boolean(oddValue && oddOk && hasConfirm && valueOk && probOk && !coldOdd);
+  let status = "EVITAR";
+  let reason = "SEM CONFLUENCIA";
+  if (!oddValue) reason = "SEM ODD";
+  else if (!oddOk) reason = "ODD SEM BASE 50";
+  else if (coldOdd) reason = "ODD FRIA";
+  else if (!valueOk) reason = ev !== null && ev < 0 ? "EV NEGATIVO" : "EDGE BAIXO";
+  else if (!probOk) reason = "PROB <50";
+  else if (!hasConfirm) reason = "SEM CONFLUENCIA";
+  else if (iaEntryOk) {
+    status = "ENTRADA IA";
+    reason = "ODD + CONFIRMACAO";
+  }
+  const confidence = Math.round(
+    Math.min(35, Math.max(0, (prob || 0) - 40)) +
+    Math.min(25, Math.max(0, (odd?.p || 0) - 45)) +
+    Math.min(20, Math.max(0, (team?.p || 0) - 45)) +
+    Math.min(20, Math.max(0, (scoreModel?.marketP || 0) - 45))
+  );
+  return { oddOk, teamOk, scoreOk, valueOk, probOk, hasConfirm, iaEntryOk, status, reason, confidence };
+}
+
 function analyzeGame(row, history, line, market) {
   const oddValue = oddsForMarket(row, market)[0] || null;
   const line480 = line.find(item => item.w === 480) || line.find(item => item.p !== null) || {};
@@ -374,37 +415,16 @@ function analyzeGame(row, history, line, market) {
   const bestBase = realBases.sort((a, b) => b.p - a.p || b.j - a.j)[0] || null;
   const hasRealBase = Boolean(bestBase);
   const realBaseOk = Boolean(bestBase && bestBase.p >= MIN_REAL_PCT);
-  let status = "SEM BASE";
-  let rank = 0;
-  if (!oddValue) {
-    status = "SEM ODD";
-  } else if (!hasRealBase) {
-    status = "SEM BASE";
-  } else if (!realBaseOk) {
-    status = "BASE <50";
-  } else if (coldOdd) {
-    status = "ODD FRIA";
-    rank = 1;
-  } else if (ev !== null && ev < 0) {
-    status = "EV NEGATIVO";
-    rank = 1;
-  } else if (ev !== null && (ev < MIN_EV || edge < MIN_EDGE)) {
-    status = "EDGE BAIXO";
-    rank = 1;
-  } else if (ev !== null && ev >= MIN_EV && edge >= MIN_EDGE) {
-    status = "OBSERVAR";
-    rank = 2;
-  } else if (ev !== null) {
-    status = "AGUARDAR";
-    rank = 1;
-  }
-  return { row, oddValue, line480, team, odd, bestBase, hasRealBase, realBaseOk, scoreModel, prob, fairOdd, edge, ev, coldOdd, status, rank };
+  const gate = confidenceGate({ oddValue, team, odd, scoreModel, prob, edge, ev, coldOdd });
+  const status = gate.status;
+  const rank = gate.iaEntryOk ? 3 : 0;
+  return { row, oddValue, line480, team, odd, bestBase, hasRealBase, realBaseOk, scoreModel, prob, fairOdd, edge, ev, coldOdd, status, rank, gate };
 }
 
 function agentRank(item) {
-  const base = item.status === "OBSERVAR" ? 400 : item.status === "AGUARDAR" ? 300 : item.status === "EDGE BAIXO" ? 200 : item.status === "EV NEGATIVO" ? 100 : 0;
+  const base = item.gate?.iaEntryOk ? 600 : 0;
   const baseCount = Math.max(item.team?.j || 0, item.odd?.j || 0);
-  return base + Math.max(0, item.ev || 0) + Math.min(25, baseCount);
+  return base + Math.max(0, item.gate?.confidence || 0) + Math.max(0, item.ev || 0) + Math.min(25, baseCount);
 }
 
 function agentSweepForGame(row, liga) {
@@ -421,27 +441,31 @@ function agentSweepForGame(row, liga) {
     })
     .filter(Boolean)
     .sort((a, b) => b.agentScore - a.agentScore || (b.ev ?? -999) - (a.ev ?? -999) || (b.prob ?? -999) - (a.prob ?? -999))
-    .slice(0, 4);
+    .slice(0, 3);
 }
 
 function agentSweepText(sweep) {
   if (!sweep || !sweep.length) return "<span class=\"muted\">Agente IA: sem odds lidas neste jogo</span>";
-  return sweep.map(item => {
+  const best = sweep[0];
+  const head = best.gate?.iaEntryOk
+    ? `<div class="ok">DECISAO IA: ENTRADA ${esc(best.market.name)} @${best.oddValue.toFixed(2)} | confianca ${best.gate.confidence}</div>`
+    : `<div class="bad">DECISAO IA: EVITAR | ${esc(best.gate?.reason || best.status)}</div>`;
+  return head + sweep.map(item => {
     const teamBase = item.team ? `${item.team.g}/${item.team.j} ${fmtPct(item.team.p)}` : "0/0 -";
     const oddBase = item.odd ? `${item.odd.g}/${item.odd.j} ${fmtPct(item.odd.p)}` : "0/0 -";
-    const scoreTop = item.scoreModel?.top?.[0] ? `${item.scoreModel.top[0].score} ${item.scoreModel.top[0].count}/${item.scoreModel.j}` : "placar 0/0";
-    return `<div><span class="${clsFor(item.status)}">${esc(item.market.name)}</span> @${item.oddValue.toFixed(2)} ${esc(item.status)} | EV ${fmtNum(item.ev)}% | Times ${teamBase} | Odd ${oddBase} | ${scoreTop}</div>`;
+    const scoreBase = item.scoreModel?.j ? `${item.scoreModel.marketG}/${item.scoreModel.j} ${fmtPct(item.scoreModel.marketP)}` : "0/0 -";
+    return `<div><span class="${clsFor(item.status)}">${esc(item.market.name)}</span> @${item.oddValue.toFixed(2)} ${esc(item.status)} | ${esc(item.gate?.reason || "-")} | Prob ${fmtPct(item.prob)} | EV ${fmtNum(item.ev)}% | Times ${teamBase} | Odd ${oddBase} | Placar ${scoreBase}</div>`;
   }).join("");
 }
 
 function clsFor(status) {
-  if (status === "OBSERVAR") return "ok";
+  if (status === "ENTRADA IA" || status === "OBSERVAR") return "ok";
   if (status === "AGUARDAR" || status === "EDGE BAIXO" || status === "BASE <50") return "warn";
   return "bad";
 }
 
 function leagueClass(status) {
-  if (status === "OBSERVAR") return "watch";
+  if (status === "ENTRADA IA" || status === "OBSERVAR") return "enter";
   if (status === "SEM DADOS") return "empty";
   return "block";
 }
