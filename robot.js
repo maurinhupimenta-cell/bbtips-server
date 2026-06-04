@@ -13,7 +13,7 @@ clearInterval(window[TIMER]);
 ["BBTIPS_FINAL_ROBO_TIMER","BBTIPS_API_ALERTAS_TIMER","BBTIPS_INTERCEPTA_API_TIMER","BBTIPS_PRO_TRADER_TIMER","HB_MULTI_TIMER","BBTIPS_SCANNER_COLLECT_TIMER"].forEach(k=>{try{clearInterval(window[k])}catch(e){}});
 ["bbtips-api-alertas","bbtips-intercepta-api","hb-multi","hb-tips-scanner","bbtips-robo-root","bbtips-robo-canvas","bbtips-robo-desenho","bbtips-marker-handle"].forEach(id=>document.getElementById(id)?.remove());
 
-const CONFIG={market:"over25",tol:0.8,minEV:5,minEdge:3,minProb:0,minOddPct:45,minRealPct:50,minEntryProb:50,minScoreSample:30,minAntecedentSample:8,minRefSample:12,minOddSample:12,minTeamSample:8,maxProximos:4,intervalMs:180000,windows:[120,240,480,960],ligas:[1,2,3,4,5,6],radarLigas:[1,2,3,4],ligaAuto:true,autoRefresh:false,autoApi:false,alerts:false,scannerTelemetry:false,graphRobo:false,fastMode:true,horas:"Horas3",filtros:"o15,o25,u25,ambs,ambn,o35,u15,u35,ge5,tgv5,tgc5,ftc,fte,ftv"};
+const CONFIG={market:"over25",tol:0.8,minEV:5,minEdge:3,minProb:0,minOddPct:45,minRealPct:50,minEntryProb:50,minScoreSample:30,minAntecedentSample:8,minRefSample:12,minOddSample:12,minTeamSample:8,maxProximos:4,intervalMs:180000,windows:[120,240,480,960],ligas:[1,2,3,4,5,6],radarLigas:[1,2,3,4],ligaAuto:true,autoRefresh:false,autoApi:false,alerts:true,scannerTelemetry:false,graphRobo:true,horas:"Horas3",filtros:"o15,o25,u25,ambs,ambn,o35,u15,u35,ge5,tgv5,tgc5,ftc,fte,ftv"};
 const LIGA_LABELS={1:"Copa",2:"Euro",3:"Super",4:"Premier",5:"Split",6:"Express"};
 const SCHEDULE_TIME_ZONE="Europe/London";
 let PANEL_HOVER=false;
@@ -1873,7 +1873,6 @@ function sweepScore(item){
   return (an.gate?.iaEntryOk?600:0)+(an.gate?.confidence||0)+Math.max(0,an.ev||0)+Math.min(25,base);
 }
 function marketSweepForGame(g,series){
-  if(CONFIG.fastMode)return [{market:g.market,odd:g.odd,an:g.analysis||analysisForGame(g,series),score:0}];
   const out=[];
   MARKETS.forEach(m=>{
     const odd=oddsForMarket(g.text||"",m)[0];
@@ -1885,7 +1884,6 @@ function marketSweepForGame(g,series){
   return out.sort((a,b)=>b.score-a.score||((b.an.ev??-999)-(a.an.ev??-999))).slice(0,3);
 }
 function bestMarketPickForGame(g,series){
-  if(CONFIG.fastMode)return {market:g.market,odd:g.odd,an:g.analysis||analysisForGame(g,series),score:0};
   const sweep=marketSweepForGame(g,series);
   return sweep[0]||{market:g.market,odd:g.odd,an:g.analysis||analysisForGame(g,series),score:0};
 }
@@ -1910,8 +1908,10 @@ function analyze(){
   const signals=[];
   games.forEach(g=>{
     g.analysis=analysisForGame(g,series);
-    if(g.analysis.gate?.iaEntryOk){
-      signals.push({game:g,best:g.analysis.audit,tipo:"ENTRADA TESTADA"});
+    const hits=g.analysis.reads.filter(r=>r.ready&&r.fundo&&(r.fundo30||r.fundoMin)&&Number.isFinite(r.ev));
+    const podeSinal=g.analysis.valueOk&&g.analysis.baseForte&&g.analysis.evGale!==null&&g.analysis.evGale>=CONFIG.minEV&&!g.analysis.coldOdd;
+    if(hits.length&&podeSinal){
+      signals.push({game:g,hits,best:hits.sort((a,b)=>b.w-a.w||b.ev-a.ev)[0]});
     }
   });
   return {games,series,signals};
@@ -1921,17 +1921,17 @@ function notify(signals){
   let old=[];try{old=JSON.parse(localStorage.getItem(SEEN)||"[]")}catch(e){}
   const seen=new Set(old);
   signals.slice(0,5).forEach(s=>{
-    const k=`tested|${s.game.market.key}|${s.game.time}|${s.game.name}|${s.game.odd}|${s.best?.label||""}`;
+    const k=`${s.game.market.key}|${s.game.time}|${s.game.name}|${s.best.w}|${Math.round(s.best.cur)}`;
     if(seen.has(k))return;
     seen.add(k);beep();
-    const msg=`${ligaNome()} | ENTRADA TESTADA | ${s.game.market.name} @${s.game.odd} | ${s.game.time} ${s.game.name} | ${s.best?.label||"referencia"} ${s.best?.g||0}/${s.best?.j||0}`;
+    const tipo=s.tipo||"FUNDO";
+    const msg=`${ligaNome()} | ${tipo} ${s.best.w} | ${s.game.market.name} @${s.game.odd} | ${s.game.time} ${s.game.name} | EV linha ${Number.isFinite(s.best.ev)?s.best.ev.toFixed(1):"-"}%`;
     if("Notification" in window&&Notification.permission==="granted")new Notification("BBTips sinal",{body:msg});
     else if("Notification" in window&&Notification.permission!=="denied")Notification.requestPermission();
   });
   safeSetJson(SEEN,[...seen],60);
 }
 function notifyFundo(series){
-  return;
   if(!CONFIG.alerts)return;
   const fundos=[...globalFundos(series),...visualFundos(series)];
   if(!fundos.length)return;
@@ -1951,7 +1951,6 @@ function notifyFundo(series){
   safeSetJson(SEEN+"_FUNDO",[...seen],60);
 }
 function notifyTrendUp(){
-  return;
   if(!CONFIG.alerts)return;
   const sinais=trendUpSignals();
   if(!sinais.length)return;
@@ -2007,12 +2006,13 @@ function gamesTable(games,series){
   }).join("")}</table>`;
 }
 function signalsBox(signals){
-  if(!signals.length)return "<p class='warn'>Sem entrada testada agora. O robo nao deve sugerir Over/Under sem regra aprovada no historico.</p>";
+  const fundos=globalFundos([]).filter(f=>f.ready&&f.j>=f.w);
+  const fundoHtml=fundos.length?fundos.map(f=>`<div class="sig"><b class="ok">BATEU MINIMA ${f.w}</b> ${esc(market().name)} | ${f.g}/${f.j} ${f.p.toFixed(1)}% | minima ${f.min.toFixed(1)}%</div>`).join(""):"";
+  if(!signals.length&&!fundoHtml)return "<p class='warn'>Sem sinal agora. O som toca quando a linha calculada do mercado bater fundo/minima em 120, 240, 480 ou 960.</p>";
   return signals.map(s=>{
-    const pct=Number.isFinite(s.best?.p)?s.best.p.toFixed(1)+"%":"-";
-    const roi=Number.isFinite(s.best?.roi)?s.best.roi.toFixed(1)+"%":"-";
-    return `<div class="sig"><b class="ok">ENTRADA TESTADA</b> ${esc(s.game.market.name)} @${s.game.odd.toFixed(2)} | ${esc(s.game.time)} ${esc(s.game.name)}<br>${esc(s.best?.label||"referencia")} | ${s.best?.g||0}/${s.best?.j||0} ${pct} | ROI ${roi}</div>`;
-  }).join("");
+    const tipo=s.tipo||"FUNDO";
+    return `<div class="sig"><b class="ok">${tipo} ${s.best.w}</b> ${esc(s.game.market.name)} @${s.game.odd.toFixed(2)} | ${esc(s.game.time)} ${esc(s.game.name)} | atual ${Number.isFinite(s.best.cur)?s.best.cur.toFixed(1):"-"} min ${Number.isFinite(s.best.min)?s.best.min.toFixed(1):"-"} EV linha ${Number.isFinite(s.best.ev)?s.best.ev.toFixed(1):"-"}%</div>`;
+  }).join("")+fundoHtml;
 }
 function trendBox(series){
   const rows=calcResultWindows(market());
@@ -2111,15 +2111,22 @@ function draw(){
   const a=analyze();
   sendResultadosAgenteLocal();
   notify(a.signals);
-  const fundoTxt="";
+  notifyFundo(a.series);
+  notifyTrendUp();
+  const fundos=[...globalFundos(a.series),...visualFundos(a.series)];
+  const fundoTxt=fundos.length?` | FUNDO ${fundos.map(f=>`${f.w}:${f.p.toFixed(1)}%`).join(" ")}`:"";
   const ligaAtual=activeLiga();
   const opts=MARKETS.map(m=>`<option value="${m.key}" ${m.key===CONFIG.market?"selected":""}>${m.name}</option>`).join("");
   P.innerHTML=`<div class="top"><b>BBTips Robo | ${new Date().toLocaleTimeString()} | Liga ${ligaAtual||"auto"} | Mercado ${esc(market().name)} | API ${API_ROWS.length} | Resultados ${RESULTS_CACHE.length} | Proximos ${a.games.length} | Sinais ${a.signals.length}${fundoTxt}</b>
   <span>Mercado <select id="rb-market">${opts}</select> EV+ <input id="rb-ev" value="${CONFIG.minEV}"> Edge+ <input id="rb-edge" value="${CONFIG.minEdge}"> OddFria% <input id="rb-cold" value="${CONFIG.minOddPct}"> Prox <input id="rb-maxprox" value="${CONFIG.maxProximos}"> Tol <input id="rb-tol" value="${CONFIG.tol}">
   <button id="rb-api">Atualizar API</button><button id="rb-hist">Historico</button><button id="rb-scan">Atualizar</button><button id="rb-som">Som</button><button id="rb-min">Minimizar</button><button id="rb-close">Fechar</button></span></div>
   <div class="body">
-    <h3>Proximos jogos da liga atual</h3>${gamesTable(a.games,a.series)}
-    <h3>Entradas testadas</h3>${signalsBox(a.signals)}
+    ${multiLeagueRadarBox()}
+    <h3>Proximos jogos da liga atual</h3>${trendUpBox()}${marketRankingBox()}${gamesTable(a.games,a.series)}
+    <h3>Sinais por minima calculada pelos resultados</h3>${signalsBox(a.signals)}
+    <h3>Pagamento do mercado aberto</h3>${statusStatsBox()}
+    <h3>Conferencia dos ultimos resultados</h3>${resultsCheckTable()}
+    <h3>Linha calculada pelos resultados fechados</h3>${trendBox(a.series)}
   </div>`;
   document.getElementById("rb-market").onchange=e=>{CONFIG.market=e.target.value;scheduleDraw()};
   document.getElementById("rb-ev").onchange=e=>{CONFIG.minEV=Number(e.target.value)||0;scheduleDraw()};
