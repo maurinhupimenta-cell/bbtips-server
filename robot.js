@@ -1601,14 +1601,19 @@ function oddBand(v){
 function scoreModelForGame(game,m){
   const names=teamNames(game.name);
   const band=oddBand(game.odd);
-  const rows=orderedResults().filter(r=>{
+  let rows=orderedResults().filter(r=>{
     const p=teamNames(r.name);
     const hasTeam=names.some(n=>p.includes(n));
     const odds=oddsForMarket(r.txt,m);
     const sameBand=band&&odds.some(o=>oddBand(o)===band);
     return hasTeam||sameBand;
   }).slice(0,80);
-  if(!rows.length)return null;
+  let label=`times/faixa ${band||"-"}`;
+  if(!rows.length){
+    rows=resultHistoryForMarket(m).slice(0,80).map(x=>x.r||x).filter(r=>r&&r.score);
+    label="liga recente";
+  }
+  if(!rows.length)return {label,j:0,topScores:[],topOdds:[],marketP:null,green:0};
   const scoreCnt={},oddWin={};
   let green=0;
   rows.forEach(r=>{
@@ -1624,12 +1629,12 @@ function scoreModelForGame(game,m){
   });
   const topScores=Object.entries(scoreCnt).sort((a,b)=>b[1]-a[1]).slice(0,4).map(([k,v])=>`${k} ${v}/${rows.length} ${(v/rows.length*100).toFixed(1)}%`);
   const topOdds=Object.entries(oddWin).sort((a,b)=>b[1]-a[1]).slice(0,3).map(([k,v])=>`${k} ${v}x`);
-  return {label:`base times odd ${band||"-"}`,j:rows.length,topScores,topOdds,marketP:green/rows.length*100};
+  return {label,j:rows.length,topScores,topOdds,marketP:green/rows.length*100,green};
 }
 function scorePullText(stat){
-  if(!stat)return "Placar puxa: sem base";
-  if(stat.label)return `Placar puxa: ${stat.label}: ${stat.topScores.join(" | ")}<br>Mercado pagou ${stat.marketP.toFixed(1)}%${stat.topOdds.length?` | Odds: ${stat.topOdds.join(" | ")}`:""}`;
-  return `Placar puxa apos ${stat.score}: ${stat.topScores.join(" | ")}${stat.topOdds.length?`<br>Odds: ${stat.topOdds.join(" | ")}`:""}`;
+  if(!stat||!stat.j)return "Placar correto: 0/0 -";
+  if(stat.label)return `Placar correto (${esc(stat.label)}, ${stat.j} jogos): ${stat.topScores.join(" | ")}<br>Mercado nessa base: ${stat.green}/${stat.j} ${Number.isFinite(stat.marketP)?stat.marketP.toFixed(1)+"%":"-"}${stat.topOdds.length?` | Odds: ${stat.topOdds.join(" | ")}`:""}`;
+  return `Placar correto apos ${stat.score}: ${stat.topScores.join(" | ")}${stat.topOdds.length?`<br>Odds: ${stat.topOdds.join(" | ")}`:""}`;
 }
 function statusPayStats(m){
   const out={OBSERVAR:{g:0,j:0,streak:0,last:""},AGUARDAR:{g:0,j:0,streak:0,last:""}};
@@ -1806,7 +1811,8 @@ function gamesTable(games,series){
     const horario=hourStatsText(hourStatsForGame(g,g.market));
     const liga=ligaStatsText(g.market);
     const detalhe=teamDetailText(g,g.market);
-    return `<tr><td>${esc(g.time)}</td><td>${esc(g.name)}</td><td>${esc(g.market.name)}</td><td>${g.odd.toFixed(2)}</td><td class="${cls}">${esc(an.motivo)}<br>Score ${an.score}</td><td>Prob calibrada ${prob}<br>Odd justa ${fair}<br>Edge odd ${edge}<br>EV real ${ev}<br>EV gale ${evG}<br>${ciclo}<br>${oddFixa}<br>${horario}<br>${liga}</td><td>Times geral: ${team}<br>${oneXTwoOddsText(g)}<br>${detalhe}<br>Odd atual @${g.odd.toFixed(2)} ${odd}</td><td>${reads}</td></tr>`;
+    const placar=scorePullText(scoreModelForGame(g,g.market));
+    return `<tr><td>${esc(g.time)}</td><td>${esc(g.name)}</td><td>${esc(g.market.name)}</td><td>${g.odd.toFixed(2)}</td><td class="${cls}">${esc(an.motivo)}<br>Score ${an.score}</td><td>Prob calibrada ${prob}<br>Odd justa ${fair}<br>Edge odd ${edge}<br>EV real ${ev}<br>EV gale ${evG}<br>${placar}<br>${ciclo}<br>${oddFixa}<br>${horario}<br>${liga}</td><td>Times geral: ${team}<br>${oneXTwoOddsText(g)}<br>${detalhe}<br>Odd atual @${g.odd.toFixed(2)} ${odd}</td><td>${reads}</td></tr>`;
   }).join("")}</table>`;
 }
 function signalsBox(signals){

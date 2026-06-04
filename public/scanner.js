@@ -292,6 +292,53 @@ function oddPayPct(odd, history, market) {
   return { g, j: rows.length, p: rows.length ? pct(rows, market) : null };
 }
 
+function oddBand(value) {
+  if (!Number.isFinite(value)) return null;
+  if (value < 1.5) return "<1.50";
+  if (value < 1.8) return "1.50-1.79";
+  if (value < 2.2) return "1.80-2.19";
+  if (value < 3) return "2.20-2.99";
+  if (value < 5) return "3.00-4.99";
+  if (value < 10) return "5.00-9.99";
+  return "10+";
+}
+
+function scoreModelForGame(game, history, market, oddValue) {
+  const names = teamNames(game.name);
+  const band = oddBand(oddValue);
+  const scoped = history.filter(row => {
+    const text = String(row.name || row.txt || "").toLowerCase();
+    const hasTeam = names.some(name => text.includes(name));
+    const sameBand = band && oddsForMarket(row, market).some(value => oddBand(value) === band);
+    return hasTeam || sameBand;
+  }).slice(0, 120);
+  const rows = scoped.length ? scoped : history.slice(0, 120);
+  if (!rows.length) return { label: "liga recente", j: 0, top: [], marketG: 0, marketP: null };
+  const counts = {};
+  rows.forEach(row => {
+    const key = scoreText(row.score);
+    counts[key] = (counts[key] || 0) + 1;
+  });
+  const top = Object.entries(counts)
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .slice(0, 4)
+    .map(([score, count]) => ({ score, count, p: count / rows.length * 100 }));
+  const marketG = rows.filter(row => market.pays(row.score)).length;
+  return {
+    label: scoped.length ? `times/faixa ${band || "-"}` : "liga recente",
+    j: rows.length,
+    top,
+    marketG,
+    marketP: rows.length ? marketG / rows.length * 100 : null
+  };
+}
+
+function scoreModelText(model) {
+  if (!model || !model.j) return "Placar: 0/0 -";
+  const placares = model.top.map(item => `${item.score} ${item.count}/${model.j} ${fmtPct(item.p)}`).join(" | ");
+  return `Placar (${esc(model.label)}): ${placares}<br>Mercado nessa base: ${model.marketG}/${model.j} ${fmtPct(model.marketP)}`;
+}
+
 function weightedProb(lineP, team, odd) {
   const parts = [];
   if (Number.isFinite(lineP)) parts.push({ v: lineP, w: 2 });
@@ -307,6 +354,7 @@ function analyzeGame(row, history, line, market) {
   const line480 = line.find(item => item.w === 480) || line.find(item => item.p !== null) || {};
   const team = teamPayPct(row, history, market);
   const odd = oddPayPct(oddValue, history, market);
+  const scoreModel = scoreModelForGame(row, history, market, oddValue);
   const prob = weightedProb(line480.p, team, odd);
   const fairOdd = prob ? 100 / prob : null;
   const breakEven = oddValue ? 100 / oddValue : null;
@@ -334,7 +382,7 @@ function analyzeGame(row, history, line, market) {
     status = "AGUARDAR";
     rank = 1;
   }
-  return { row, oddValue, line480, team, odd, prob, fairOdd, edge, ev, coldOdd, status, rank };
+  return { row, oddValue, line480, team, odd, scoreModel, prob, fairOdd, edge, ev, coldOdd, status, rank };
 }
 
 function clsFor(status) {
@@ -409,6 +457,7 @@ function render() {
     const lineText = game.line480.j ? `480: ${game.line480.g}/${game.line480.j} ${fmtPct(game.line480.p)} min ${fmtPct(game.line480.min)}` : "sem linha";
     const teamText = game.team ? `${game.team.g}/${game.team.j} ${fmtPct(game.team.p)}` : "sem base";
     const oddText = game.odd ? `${game.odd.g}/${game.odd.j} ${fmtPct(game.odd.p)}${game.coldOdd ? " ODD FRIA" : ""}` : "sem base";
+    const scoreLine = scoreModelText(game.scoreModel);
     return `
       <tr>
         <td>${esc(game.ligaName)}</td>
@@ -425,7 +474,8 @@ function render() {
         </td>
         <td>
           Times: ${teamText}<br>
-          Odd: ${oddText}
+          Odd: ${oddText}<br>
+          ${scoreLine}
         </td>
         <td>${lineText}</td>
       </tr>
