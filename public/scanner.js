@@ -4,10 +4,6 @@ const MIN_SAMPLE = 12;
 const MIN_EV = 5;
 const MIN_EDGE = 3;
 const MIN_ODD_PCT = 45;
-const MIN_REAL_PCT = 50;
-const MIN_TEAM_SAMPLE = 8;
-const MIN_SCORE_SAMPLE = 30;
-const MIN_ENTRY_PROB = 50;
 
 const LIGAS = [
   [6, "Express"],
@@ -213,14 +209,6 @@ function oddsForMarket(row, market) {
   return out;
 }
 
-function marketList() {
-  return Object.values(MARKETS);
-}
-
-function hasAnyMarketOdd(row) {
-  return marketList().some(market => oddsForMarket(row, market).some(value => Number.isFinite(value) && value > 1));
-}
-
 function teamNames(name) {
   return String(name || "").split(/\s+x\s+/i).map(x => x.toLowerCase().trim()).filter(Boolean);
 }
@@ -259,7 +247,7 @@ function upcomingRows(liga, market) {
   return uniqueRows(state.rows)
     .filter(row => Number(row.liga) === Number(liga) && isScannerFutureRow(row) && (row.name || row.time) && isFutureTime(row.time))
     .filter(row => parseTime(row.time) !== null)
-    .filter(row => hasAnyMarketOdd(row))
+    .filter(row => oddsForMarket(row, market).some(value => Number.isFinite(value) && value > 1))
     .sort((a, b) => futureDistance(a) - futureDistance(b))
     .slice(0, 6);
 }
@@ -317,12 +305,12 @@ function oddBand(value) {
 
 function scoreModelForGame(game, history, market, oddValue) {
   const names = teamNames(game.name);
-  const exactOdd = Number.isFinite(oddValue) ? oddValue : null;
+  const band = oddBand(oddValue);
   const scoped = history.filter(row => {
     const text = String(row.name || row.txt || "").toLowerCase();
     const hasTeam = names.some(name => text.includes(name));
-    const sameOdd = exactOdd !== null && oddsForMarket(row, market).some(value => Math.abs(value - exactOdd) <= 0.001);
-    return hasTeam || sameOdd;
+    const sameBand = band && oddsForMarket(row, market).some(value => oddBand(value) === band);
+    return hasTeam || sameBand;
   }).slice(0, 120);
   const rows = scoped.length ? scoped : history.slice(0, 120);
   if (!rows.length) return { label: "liga recente", j: 0, top: [], marketG: 0, marketP: null };
@@ -336,17 +324,8 @@ function scoreModelForGame(game, history, market, oddValue) {
     .slice(0, 4)
     .map(([score, count]) => ({ score, count, p: count / rows.length * 100 }));
   const marketG = rows.filter(row => market.pays(row.score)).length;
-  let label = "liga recente";
-  if (scoped.length) {
-    const exactCount = rows.filter(row => exactOdd !== null && oddsForMarket(row, market).some(value => Math.abs(value - exactOdd) <= 0.001)).length;
-    const teamCount = rows.filter(row => {
-      const text = String(row.name || row.txt || "").toLowerCase();
-      return names.some(name => text.includes(name));
-    }).length;
-    label = exactCount && teamCount ? `times/odd exata @${exactOdd.toFixed(2)}` : exactCount ? `odd exata @${exactOdd.toFixed(2)}` : "times";
-  }
   return {
-    label,
+    label: scoped.length ? `times/faixa ${band || "-"}` : "liga recente",
     j: rows.length,
     top,
     marketG,
@@ -370,35 +349,6 @@ function weightedProb(lineP, team, odd) {
   return parts.reduce((sum, part) => sum + part.v * part.w, 0) / sw;
 }
 
-function confidenceGate({ oddValue, team, odd, scoreModel, prob, edge, ev, coldOdd }) {
-  const oddOk = Boolean(odd && odd.j >= MIN_SAMPLE && Number.isFinite(odd.p) && odd.p >= MIN_REAL_PCT);
-  const teamOk = Boolean(team && team.j >= MIN_TEAM_SAMPLE && Number.isFinite(team.p) && team.p >= MIN_REAL_PCT);
-  const scoreOk = Boolean(scoreModel && scoreModel.j >= MIN_SCORE_SAMPLE && Number.isFinite(scoreModel.marketP) && scoreModel.marketP >= MIN_REAL_PCT);
-  const valueOk = Number.isFinite(ev) && ev >= MIN_EV && Number.isFinite(edge) && edge >= MIN_EDGE;
-  const probOk = Number.isFinite(prob) && prob >= MIN_ENTRY_PROB;
-  const hasConfirm = teamOk || scoreOk;
-  const iaEntryOk = Boolean(oddValue && oddOk && hasConfirm && valueOk && probOk && !coldOdd);
-  let status = "EVITAR";
-  let reason = "SEM CONFLUENCIA";
-  if (!oddValue) reason = "SEM ODD";
-  else if (!oddOk) reason = "ODD SEM BASE 50";
-  else if (coldOdd) reason = "ODD FRIA";
-  else if (!valueOk) reason = ev !== null && ev < 0 ? "EV NEGATIVO" : "EDGE BAIXO";
-  else if (!probOk) reason = "PROB <50";
-  else if (!hasConfirm) reason = "SEM CONFLUENCIA";
-  else if (iaEntryOk) {
-    status = "ENTRADA IA";
-    reason = "ODD + CONFIRMACAO";
-  }
-  const confidence = Math.round(
-    Math.min(35, Math.max(0, (prob || 0) - 40)) +
-    Math.min(25, Math.max(0, (odd?.p || 0) - 45)) +
-    Math.min(20, Math.max(0, (team?.p || 0) - 45)) +
-    Math.min(20, Math.max(0, (scoreModel?.marketP || 0) - 45))
-  );
-  return { oddOk, teamOk, scoreOk, valueOk, probOk, hasConfirm, iaEntryOk, status, reason, confidence };
-}
-
 function analyzeGame(row, history, line, market) {
   const oddValue = oddsForMarket(row, market)[0] || null;
   const line480 = line.find(item => item.w === 480) || line.find(item => item.p !== null) || {};
@@ -411,61 +361,38 @@ function analyzeGame(row, history, line, market) {
   const edge = prob !== null && breakEven !== null ? prob - breakEven : null;
   const ev = prob !== null && oddValue ? (prob / 100 * oddValue - 1) * 100 : null;
   const coldOdd = odd && odd.j >= MIN_SAMPLE && Number.isFinite(odd.p) && odd.p < MIN_ODD_PCT;
-  const realBases = [team, odd].filter(base => base && base.j >= MIN_SAMPLE && Number.isFinite(base.p));
-  const bestBase = realBases.sort((a, b) => b.p - a.p || b.j - a.j)[0] || null;
-  const hasRealBase = Boolean(bestBase);
-  const realBaseOk = Boolean(bestBase && bestBase.p >= MIN_REAL_PCT);
-  const gate = confidenceGate({ oddValue, team, odd, scoreModel, prob, edge, ev, coldOdd });
-  const status = gate.status;
-  const rank = gate.iaEntryOk ? 3 : 0;
-  return { row, oddValue, line480, team, odd, bestBase, hasRealBase, realBaseOk, scoreModel, prob, fairOdd, edge, ev, coldOdd, status, rank, gate };
-}
-
-function agentRank(item) {
-  const base = item.gate?.iaEntryOk ? 600 : 0;
-  const baseCount = Math.max(item.team?.j || 0, item.odd?.j || 0);
-  return base + Math.max(0, item.gate?.confidence || 0) + Math.max(0, item.ev || 0) + Math.min(25, baseCount);
-}
-
-function agentSweepForGame(row, liga) {
-  return marketList()
-    .map(market => {
-      const oddValue = oddsForMarket(row, market)[0] || null;
-      if (!oddValue) return null;
-      const history = historyRows(liga, market);
-      const line = calcLine(history, market);
-      const item = analyzeGame(row, history, line, market);
-      item.market = market;
-      item.agentScore = agentRank(item);
-      return item;
-    })
-    .filter(Boolean)
-    .sort((a, b) => b.agentScore - a.agentScore || (b.ev ?? -999) - (a.ev ?? -999) || (b.prob ?? -999) - (a.prob ?? -999))
-    .slice(0, 3);
-}
-
-function agentSweepText(sweep) {
-  if (!sweep || !sweep.length) return "<span class=\"muted\">Agente IA: sem odds lidas neste jogo</span>";
-  const best = sweep[0];
-  const head = best.gate?.iaEntryOk
-    ? `<div class="ok">DECISAO IA: ENTRADA ${esc(best.market.name)} @${best.oddValue.toFixed(2)} | confianca ${best.gate.confidence}</div>`
-    : `<div class="bad">DECISAO IA: EVITAR | ${esc(best.gate?.reason || best.status)}</div>`;
-  return head + sweep.map(item => {
-    const teamBase = item.team ? `${item.team.g}/${item.team.j} ${fmtPct(item.team.p)}` : "0/0 -";
-    const oddBase = item.odd ? `${item.odd.g}/${item.odd.j} ${fmtPct(item.odd.p)}` : "0/0 -";
-    const scoreBase = item.scoreModel?.j ? `${item.scoreModel.marketG}/${item.scoreModel.j} ${fmtPct(item.scoreModel.marketP)}` : "0/0 -";
-    return `<div><span class="${clsFor(item.status)}">${esc(item.market.name)}</span> @${item.oddValue.toFixed(2)} ${esc(item.status)} | ${esc(item.gate?.reason || "-")} | Prob ${fmtPct(item.prob)} | EV ${fmtNum(item.ev)}% | Times ${teamBase} | Odd ${oddBase} | Placar ${scoreBase}</div>`;
-  }).join("");
+  const hasBase = (team && team.j > 0) || (odd && odd.j > 0);
+  let status = "SEM BASE";
+  let rank = 0;
+  if (!oddValue) {
+    status = "SEM ODD";
+  } else if (coldOdd) {
+    status = "ODD FRIA";
+    rank = 1;
+  } else if (ev !== null && ev < 0) {
+    status = "EV NEGATIVO";
+    rank = 1;
+  } else if (ev !== null && (ev < MIN_EV || edge < MIN_EDGE)) {
+    status = "EDGE BAIXO";
+    rank = 1;
+  } else if (ev !== null && ev >= MIN_EV && edge >= MIN_EDGE) {
+    status = "OBSERVAR";
+    rank = hasBase ? 2 : 1;
+  } else if (ev !== null) {
+    status = "AGUARDAR";
+    rank = 1;
+  }
+  return { row, oddValue, line480, team, odd, scoreModel, prob, fairOdd, edge, ev, coldOdd, status, rank };
 }
 
 function clsFor(status) {
-  if (status === "ENTRADA IA" || status === "OBSERVAR") return "ok";
-  if (status === "AGUARDAR" || status === "EDGE BAIXO" || status === "BASE <50") return "warn";
+  if (status === "OBSERVAR") return "ok";
+  if (status === "AGUARDAR" || status === "EDGE BAIXO") return "warn";
   return "bad";
 }
 
 function leagueClass(status) {
-  if (status === "ENTRADA IA" || status === "OBSERVAR") return "enter";
+  if (status === "OBSERVAR") return "watch";
   if (status === "SEM DADOS") return "empty";
   return "block";
 }
@@ -483,17 +410,11 @@ function summarize() {
   return LIGAS.map(([liga, name]) => {
     const history = historyRows(liga, market);
     const line = calcLine(history, market);
-    const upcoming = upcomingRows(liga, market).map(row => {
-      const item = analyzeGame(row, history, line, market);
-      item.agentSweep = agentSweepForGame(row, liga);
-      item.agentBest = item.agentSweep[0] || null;
-      item.agentScore = item.agentBest ? item.agentBest.agentScore : item.rank;
-      return item;
-    });
-    upcoming.sort((a, b) => b.agentScore - a.agentScore || b.rank - a.rank || (b.ev ?? -999) - (a.ev ?? -999) || futureDistance(a.row) - futureDistance(b.row));
+    const upcoming = upcomingRows(liga, market).map(row => analyzeGame(row, history, line, market));
+    upcoming.sort((a, b) => b.rank - a.rank || (b.ev ?? -999) - (a.ev ?? -999) || futureDistance(a.row) - futureDistance(b.row));
     const best = upcoming[0] || null;
     const last8 = history.slice(0, 8);
-    const status = best ? (best.agentBest?.status || best.status) : "SEM DADOS";
+    const status = best ? best.status : "SEM DADOS";
     return { liga, name, history, line, upcoming, best, last8, status };
   });
 }
@@ -510,8 +431,8 @@ function render() {
         <div class="small">Historico: <span class="strong">${item.history.length}</span> resultados</div>
         <div class="small">Ultimos 8: <span class="strong">${last8Wins}/${item.last8.length}</span></div>
         <div class="small">Linha 480: <span class="strong">${fmtPct(line480.p)}</span></div>
-        <div class="small">Melhor: <span class="strong">${best ? `${esc(best.row.time)} ${esc(best.agentBest?.market?.name || market.name)} ${esc(best.row.name)}` : "--"}</span></div>
-        <div class="small">EV: <span class="${best && (best.agentBest?.ev ?? best.ev) >= 0 ? "ok" : "bad"}">${best ? fmtNum(best.agentBest?.ev ?? best.ev) + "%" : "--"}</span></div>
+        <div class="small">Melhor: <span class="strong">${best ? `${esc(best.row.time)} ${esc(best.row.name)}` : "--"}</span></div>
+        <div class="small">EV: <span class="${best && best.ev >= 0 ? "ok" : "bad"}">${best ? fmtNum(best.ev) + "%" : "--"}</span></div>
       </article>
     `;
   }).join("");
@@ -533,30 +454,25 @@ function render() {
     .slice(0, 240);
 
   els.games.innerHTML = games.length ? games.map(game => {
-    const view = game.agentBest || game;
-    const lineText = view.line480.j ? `480: ${view.line480.g}/${view.line480.j} ${fmtPct(view.line480.p)} min ${fmtPct(view.line480.min)}` : "sem linha";
-    const teamText = view.team ? `${view.team.g}/${view.team.j} ${fmtPct(view.team.p)}` : "sem base";
-    const oddText = view.odd ? `${view.odd.g}/${view.odd.j} ${fmtPct(view.odd.p)}${view.coldOdd ? " ODD FRIA" : ""}` : "sem base";
-    const baseRealText = view.bestBase ? `${view.bestBase.g}/${view.bestBase.j} ${fmtPct(view.bestBase.p)}` : "0/0 -";
-    const scoreLine = scoreModelText(view.scoreModel);
-    const marketName = view.market?.name || (MARKETS[els.market.value] || MARKETS.over25).name;
+    const lineText = game.line480.j ? `480: ${game.line480.g}/${game.line480.j} ${fmtPct(game.line480.p)} min ${fmtPct(game.line480.min)}` : "sem linha";
+    const teamText = game.team ? `${game.team.g}/${game.team.j} ${fmtPct(game.team.p)}` : "sem base";
+    const oddText = game.odd ? `${game.odd.g}/${game.odd.j} ${fmtPct(game.odd.p)}${game.coldOdd ? " ODD FRIA" : ""}` : "sem base";
+    const scoreLine = scoreModelText(game.scoreModel);
     return `
       <tr>
         <td>${esc(game.ligaName)}</td>
         <td>${esc(game.row.platform || "-")}</td>
         <td>${esc(game.row.time || "-")}</td>
         <td>${esc(game.row.name || "-")}</td>
-        <td class="num">${esc(marketName)}<br>${view.oddValue ? view.oddValue.toFixed(2) : "-"}</td>
-        <td class="${clsFor(view.status)}">${esc(view.status)}</td>
-        <td>${agentSweepText(game.agentSweep)}</td>
+        <td class="num">${game.oddValue ? game.oddValue.toFixed(2) : "-"}</td>
+        <td class="${clsFor(game.status)}">${esc(game.status)}</td>
         <td>
-          Prob ${fmtPct(view.prob)}<br>
-          Odd justa ${view.fairOdd ? view.fairOdd.toFixed(2) : "-"}<br>
-          Edge ${fmtPct(view.edge)}<br>
-          EV real <span class="${view.ev >= 0 ? "ok" : "bad"}">${fmtNum(view.ev)}%</span>
+          Prob ${fmtPct(game.prob)}<br>
+          Odd justa ${game.fairOdd ? game.fairOdd.toFixed(2) : "-"}<br>
+          Edge ${fmtPct(game.edge)}<br>
+          EV real <span class="${game.ev >= 0 ? "ok" : "bad"}">${fmtNum(game.ev)}%</span>
         </td>
         <td>
-          Base real: ${baseRealText}<br>
           Times: ${teamText}<br>
           Odd: ${oddText}<br>
           ${scoreLine}
@@ -564,7 +480,7 @@ function render() {
         <td>${lineText}</td>
       </tr>
     `;
-  }).join("") : `<tr><td colspan="10" class="muted">Sem jogos visiveis coletados. Abra a grade do BBTips com o robo ligado, clique API/Atualizar e recarregue este scanner.</td></tr>`;
+  }).join("") : `<tr><td colspan="9" class="muted">Sem jogos visiveis coletados. Abra a grade do BBTips com o robo ligado, clique API/Atualizar e recarregue este scanner.</td></tr>`;
 }
 
 async function login() {
