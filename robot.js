@@ -13,7 +13,7 @@ clearInterval(window[TIMER]);
 ["BBTIPS_FINAL_ROBO_TIMER","BBTIPS_API_ALERTAS_TIMER","BBTIPS_INTERCEPTA_API_TIMER","BBTIPS_PRO_TRADER_TIMER","HB_MULTI_TIMER","BBTIPS_SCANNER_COLLECT_TIMER"].forEach(k=>{try{clearInterval(window[k])}catch(e){}});
 ["bbtips-api-alertas","bbtips-intercepta-api","hb-multi","hb-tips-scanner","bbtips-robo-root","bbtips-robo-canvas","bbtips-robo-desenho","bbtips-marker-handle"].forEach(id=>document.getElementById(id)?.remove());
 
-const CONFIG={market:"over25",tol:0.8,minEV:8,minProb:58,minOddPct:45,minOddSample:50,minTeamSample:50,maxProximos:4,intervalMs:180000,windows:[120,240,480,960],ligas:[1,2,3,4,5,6],radarLigas:[1,2,3,4],ligaAuto:true,autoRefresh:false,autoApi:false,alerts:false,scannerTelemetry:false,graphRobo:true,horas:"Horas3",filtros:"o15,o25,u25,ambs,ambn,o35,u15,u35,ge5,tgv5,tgc5,ftc,fte,ftv"};
+const CONFIG={market:"over25",tol:0.8,minEV:5,minEdge:3,minProb:0,minOddPct:45,minOddSample:12,minTeamSample:12,maxProximos:4,intervalMs:180000,windows:[120,240,480,960],ligas:[1,2,3,4,5,6],radarLigas:[1,2,3,4],ligaAuto:true,autoRefresh:false,autoApi:false,alerts:false,scannerTelemetry:false,graphRobo:true,horas:"Horas3",filtros:"o15,o25,u25,ambs,ambn,o35,u15,u35,ge5,tgv5,tgc5,ftc,fte,ftv"};
 const LIGA_LABELS={1:"Copa",2:"Euro",3:"Super",4:"Premier",5:"Split",6:"Express"};
 const SCHEDULE_TIME_ZONE="Europe/London";
 let PANEL_HOVER=false;
@@ -1673,7 +1673,7 @@ function analysisForGame(g,series){
   const ev=prob===null||!Number.isFinite(g.odd)?null:(prob/100*g.odd-1)*100;
   const p=prob===null?null:prob/100;
   const evGale=p===null?null:(p*(g.odd-1)+(1-p)*(p*(g.odd-2)+(1-p)*(-2)))*100;
-  const probOk=probEdge!==null&&probEdge>=3&&prob>=CONFIG.minProb;
+  const probOk=probEdge!==null&&probEdge>=CONFIG.minEdge;
   const evOk=ev!==null&&ev>=CONFIG.minEV;
   let score=0;
   if(best?.fundo)score+=35;
@@ -1685,13 +1685,14 @@ function analysisForGame(g,series){
   const strongBase=(team&&team.p>=50)||(odd&&odd.p>=50)||(!team&&!odd&&prob!==null);
   const coldOdd=odd&&odd.j>=CONFIG.minOddSample&&odd.p<CONFIG.minOddPct;
   const valueOk=evOk&&probOk;
-  const baseForte=(team&&team.j>=CONFIG.minTeamSample&&team.p>=58)||(odd&&odd.j>=CONFIG.minOddSample&&odd.p>=58);
+  const baseForte=(team&&team.j>=CONFIG.minTeamSample&&team.p>=52)||(odd&&odd.j>=CONFIG.minOddSample&&odd.p>=52);
   if(evGale!==null&&evGale>=CONFIG.minEV&&valueOk&&baseForte&&!coldOdd)score=Math.max(score,70);
-  if(score<45&&valueOk&&baseForte&&!coldOdd)score=45;
+  if(score<55&&valueOk&&baseForte&&!coldOdd)score=55;
+  if(score<45&&valueOk&&!coldOdd)score=45;
   if(!valueOk)score=Math.min(score,44);
   if(coldOdd)score=Math.min(score,44);
   const status=score>=45?"OBSERVAR":"PASSAR";
-  const motivo=coldOdd?"ODD FRIA":prob===null?"SEM BASE":!baseForte?"BASE FRACA":!evOk?"EV NEGATIVO":!probOk?"EDGE BAIXO":status;
+  const motivo=coldOdd?"ODD FRIA":prob===null?"SEM BASE":!evOk?"EV NEGATIVO":!probOk?"EDGE BAIXO":baseForte?status:"OBSERVAR CAUTELA";
   return {reads,best,bestEv,team,odd,prob,fairOdd,breakEven,probEdge,ev,evGale,score:Math.round(score),status,motivo,coldOdd,valueOk,baseForte};
 }
 function analyze(){
@@ -1916,7 +1917,7 @@ function draw(){
   const ligaAtual=activeLiga();
   const opts=MARKETS.map(m=>`<option value="${m.key}" ${m.key===CONFIG.market?"selected":""}>${m.name}</option>`).join("");
   P.innerHTML=`<div class="top"><b>BBTips Robo | ${new Date().toLocaleTimeString()} | Liga ${ligaAtual||"auto"} | Mercado ${esc(market().name)} | API ${API_ROWS.length} | Resultados ${RESULTS_CACHE.length} | Proximos ${a.games.length} | Sinais ${a.signals.length}${fundoTxt}</b>
-  <span>Mercado <select id="rb-market">${opts}</select> EV real+ <input id="rb-ev" value="${CONFIG.minEV}"> Prob <input id="rb-prob" value="${CONFIG.minProb}"> OddFria% <input id="rb-cold" value="${CONFIG.minOddPct}"> Prox <input id="rb-maxprox" value="${CONFIG.maxProximos}"> Tol <input id="rb-tol" value="${CONFIG.tol}">
+  <span>Mercado <select id="rb-market">${opts}</select> EV+ <input id="rb-ev" value="${CONFIG.minEV}"> Edge+ <input id="rb-edge" value="${CONFIG.minEdge}"> OddFria% <input id="rb-cold" value="${CONFIG.minOddPct}"> Prox <input id="rb-maxprox" value="${CONFIG.maxProximos}"> Tol <input id="rb-tol" value="${CONFIG.tol}">
   <button id="rb-api">Atualizar API</button><button id="rb-hist">Historico</button><button id="rb-scan">Atualizar</button><button id="rb-som">Som</button><button id="rb-min">Minimizar</button><button id="rb-close">Fechar</button></span></div>
   <div class="body">
     ${multiLeagueRadarBox()}
@@ -1928,7 +1929,7 @@ function draw(){
   </div>`;
   document.getElementById("rb-market").onchange=e=>{CONFIG.market=e.target.value;scheduleDraw()};
   document.getElementById("rb-ev").onchange=e=>{CONFIG.minEV=Number(e.target.value)||0;scheduleDraw()};
-  document.getElementById("rb-prob").onchange=e=>{CONFIG.minProb=Number(e.target.value)||52;scheduleDraw()};
+  document.getElementById("rb-edge").onchange=e=>{CONFIG.minEdge=Number(e.target.value)||3;scheduleDraw()};
   document.getElementById("rb-cold").onchange=e=>{CONFIG.minOddPct=Number(e.target.value)||45;scheduleDraw()};
   document.getElementById("rb-maxprox").onchange=e=>{CONFIG.maxProximos=Number(e.target.value)||6;scheduleDraw()};
   document.getElementById("rb-tol").onchange=e=>{CONFIG.tol=Number(e.target.value)||0.8;scheduleDraw()};

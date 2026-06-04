@@ -1,8 +1,8 @@
 const API_BASE = location.origin;
 const SCHEDULE_TIME_ZONE = "Europe/London";
-const MIN_SAMPLE = 30;
-const MIN_EV = 3;
-const MIN_PROB = 52;
+const MIN_SAMPLE = 12;
+const MIN_EV = 5;
+const MIN_EDGE = 3;
 const MIN_ODD_PCT = 45;
 
 const LIGAS = [
@@ -322,12 +322,12 @@ function analyzeGame(row, history, line, market) {
   } else if (ev !== null && ev < 0) {
     status = "EV NEGATIVO";
     rank = 1;
-  } else if (ev !== null && (ev < MIN_EV || edge < 3 || prob < MIN_PROB)) {
+  } else if (ev !== null && (ev < MIN_EV || edge < MIN_EDGE)) {
     status = "EDGE BAIXO";
     rank = 1;
-  } else if (ev !== null && ev >= 12 && edge >= 8 && team && odd) {
+  } else if (ev !== null && ev >= MIN_EV && edge >= MIN_EDGE) {
     status = "OBSERVAR";
-    rank = 2;
+    rank = team || odd ? 2 : 1;
   } else if (ev !== null) {
     status = "AGUARDAR";
     rank = 1;
