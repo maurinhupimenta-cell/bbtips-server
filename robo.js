@@ -13,7 +13,7 @@ clearInterval(window[TIMER]);
 ["BBTIPS_FINAL_ROBO_TIMER","BBTIPS_API_ALERTAS_TIMER","BBTIPS_INTERCEPTA_API_TIMER","BBTIPS_PRO_TRADER_TIMER","HB_MULTI_TIMER","BBTIPS_SCANNER_COLLECT_TIMER"].forEach(k=>{try{clearInterval(window[k])}catch(e){}});
 ["bbtips-api-alertas","bbtips-intercepta-api","hb-multi","hb-tips-scanner","bbtips-robo-root","bbtips-robo-canvas","bbtips-robo-desenho","bbtips-marker-handle"].forEach(id=>document.getElementById(id)?.remove());
 
-const CONFIG={market:"over25",tol:0.8,minEV:5,minEdge:3,minProb:0,minOddPct:45,minOddSample:12,minTeamSample:12,maxProximos:4,intervalMs:180000,windows:[120,240,480,960],ligas:[1,2,3,4,5,6],radarLigas:[1,2,3,4],ligaAuto:true,autoRefresh:false,autoApi:false,alerts:true,scannerTelemetry:false,graphRobo:true,horas:"Horas3",filtros:"o15,o25,u25,ambs,ambn,o35,u15,u35,ge5,tgv5,tgc5,ftc,fte,ftv"};
+const CONFIG={market:"over25",tol:0.8,minEV:5,minEdge:3,minProb:0,minOddPct:45,minRealPct:50,minOddSample:12,minTeamSample:12,maxProximos:4,intervalMs:180000,windows:[120,240,480,960],ligas:[1,2,3,4,5,6],radarLigas:[1,2,3,4],ligaAuto:true,autoRefresh:false,autoApi:false,alerts:true,scannerTelemetry:false,graphRobo:true,horas:"Horas3",filtros:"o15,o25,u25,ambs,ambn,o35,u15,u35,ge5,tgv5,tgc5,ftc,fte,ftv"};
 const LIGA_LABELS={1:"Copa",2:"Euro",3:"Super",4:"Premier",5:"Split",6:"Express"};
 const SCHEDULE_TIME_ZONE="Europe/London";
 let PANEL_HOVER=false;
@@ -72,6 +72,22 @@ loadApiRows();
 compactAlertStorage();
 
 function esc(v){return String(v??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])).replace(/\s+/g," ").trim()}
+function elementReaderText(el){
+  if(!el)return "";
+  const parts=[el.innerText||"",el.textContent||"",el.getAttribute?.("title")||"",el.getAttribute?.("aria-label")||"",el.getAttribute?.("data-title")||"",el.getAttribute?.("data-odd")||"",el.getAttribute?.("data-market")||""];
+  try{
+    Array.from(el.attributes||[]).forEach(a=>{
+      if(/^data-|odd|market|cotacao|price|title|aria/i.test(a.name))parts.push(`${a.name} ${a.value}`);
+    });
+  }catch(e){}
+  const seen=new Set();
+  return parts
+    .map(x=>String(x||"").trim())
+    .filter(Boolean)
+    .filter(x=>{const k=x.slice(0,180);if(seen.has(k))return false;seen.add(k);return true})
+    .join("\n")
+    .slice(0,1500);
+}
 function safeSetJson(key,val,limit=80){
   let data=Array.isArray(val)?val.slice(-limit):val;
   try{localStorage.setItem(key,JSON.stringify(data));return true}catch(e){}
@@ -263,7 +279,7 @@ function timeFromGameText(txt){
 }
 function hasChildGameCell(el){
   return Array.from(el.children||[]).some(ch=>{
-    const txt=ch.innerText||"";
+    const txt=elementReaderText(ch);
     return /\s+x\s+/i.test(txt)&&Object.keys(oddsObjectFromText(txt)).length;
   });
 }
@@ -274,7 +290,7 @@ function readVisibleGameRows(anchor=null, seen=new Set()){
   const hours=currentHours();
   document.querySelectorAll("td,div").forEach((el,idx)=>{
     if(!isReaderVisibleElement(el)||hasChildGameCell(el))return;
-    const txt=el.innerText||"";
+    const txt=elementReaderText(el);
     if(!/\s+x\s+/i.test(txt)||hasResult(txt))return;
     const odds=oddsObjectFromText(txt);
     if(!Object.keys(odds).length)return;
@@ -454,7 +470,7 @@ function readGridRowsForTelemetry(anchor=null){
       const {hour,index:hourIndex}=hourInfo;
       cells.forEach((cell,i)=>{
         if(i<=hourIndex||minuteByCol[i]===undefined)return;
-        const txt=cell.innerText||"";
+        const txt=elementReaderText(cell);
         if(!/\s+x\s+/i.test(txt)||hasResult(txt))return;
         const time=`${hour}.${String(minuteByCol[i]).padStart(2,"0")}`;
         if(!isScheduleFuture(time,futureAnchor))return;
@@ -818,7 +834,7 @@ function readGridGames(){
       const {hour,index:hourIndex}=hourInfo;
       cells.forEach((cell,i)=>{
         if(i<=hourIndex||minuteByCol[i]===undefined)return;
-        const txt=cell.innerText||"";
+        const txt=elementReaderText(cell);
         if(!/\s+x\s+/i.test(txt))return;
         const time=`${hour}.${String(minuteByCol[i]).padStart(2,"0")}`;
         if(upcoming.size&& !upcoming.has(time))return;
@@ -1205,7 +1221,7 @@ function allResultCells(){
   let idx=0;
   document.querySelectorAll("td").forEach(el=>{
     if(!isClosedResultCell(el))return;
-    const txt=el.innerText||"";
+    const txt=elementReaderText(el);
     if(!/\s+x\s+/i.test(txt))return;
     const sc=scoreFromResult(txt);
     if(sc){
@@ -1243,7 +1259,7 @@ function gridResultCells(){
       cells.forEach((cell,i)=>{
         if(i===0||minuteByCol[i]===undefined)return;
         if(!isClosedResultCell(cell))return;
-        const txt=cell.innerText||"";
+        const txt=elementReaderText(cell);
         if(!/\s+x\s+/i.test(txt))return;
         const sc=scoreFromResult(txt);
         if(!sc)return;
@@ -1695,15 +1711,47 @@ function analysisForGame(g,series){
   const strongBase=(team&&Number.isFinite(team.p)&&team.p>=50)||(odd&&Number.isFinite(odd.p)&&odd.p>=50)||(!team&&!odd&&prob!==null);
   const coldOdd=odd&&odd.j>=CONFIG.minOddSample&&Number.isFinite(odd.p)&&odd.p<CONFIG.minOddPct;
   const valueOk=evOk&&probOk;
-  const baseForte=(team&&team.j>=CONFIG.minTeamSample&&Number.isFinite(team.p)&&team.p>=52)||(odd&&odd.j>=CONFIG.minOddSample&&Number.isFinite(odd.p)&&odd.p>=52);
+  const baseForte=(team&&team.j>=CONFIG.minTeamSample&&Number.isFinite(team.p)&&team.p>=CONFIG.minRealPct)||(odd&&odd.j>=CONFIG.minOddSample&&Number.isFinite(odd.p)&&odd.p>=CONFIG.minRealPct);
   if(evGale!==null&&evGale>=CONFIG.minEV&&valueOk&&baseForte&&!coldOdd)score=Math.max(score,70);
   if(score<55&&valueOk&&baseForte&&!coldOdd)score=55;
-  if(score<45&&valueOk&&!coldOdd)score=45;
   if(!valueOk)score=Math.min(score,44);
   if(coldOdd)score=Math.min(score,44);
-  const status=score>=45?"OBSERVAR":"PASSAR";
-  const motivo=coldOdd?"ODD FRIA":prob===null?"SEM BASE":!evOk?"EV NEGATIVO":!probOk?"EDGE BAIXO":baseForte?status:"OBSERVAR CAUTELA";
-  return {reads,best,bestEv,team,odd,prob,fairOdd,breakEven,probEdge,ev,evGale,score:Math.round(score),status,motivo,coldOdd,valueOk,baseForte};
+  const realBases=[
+    team&&team.j>=CONFIG.minTeamSample&&Number.isFinite(team.p)?team:null,
+    odd&&odd.j>=CONFIG.minOddSample&&Number.isFinite(odd.p)?odd:null
+  ].filter(Boolean);
+  const bestRealBase=realBases.sort((a,b)=>b.p-a.p||b.j-a.j)[0]||null;
+  const realBaseOk=Boolean(bestRealBase&&bestRealBase.p>=CONFIG.minRealPct);
+  if(!realBaseOk)score=Math.min(score,44);
+  const status=valueOk&&baseForte&&realBaseOk&&!coldOdd?"OBSERVAR":"PASSAR";
+  const motivo=!bestRealBase?"SEM BASE REAL":!realBaseOk?"BASE <50":coldOdd?"ODD FRIA":prob===null?"SEM PROB":!evOk?"EV NEGATIVO":!probOk?"EDGE BAIXO":status;
+  return {reads,best,bestEv,team,odd,bestRealBase,realBaseOk,prob,fairOdd,breakEven,probEdge,ev,evGale,score:Math.round(score),status,motivo,coldOdd,valueOk,baseForte};
+}
+function sweepScore(item){
+  const an=item.an||{};
+  const base=Math.max(an.team?.j||0,an.odd?.j||0);
+  return (an.valueOk&&!an.coldOdd?80:0)+(an.baseForte?30:0)+Math.max(0,an.ev||0)+Math.min(25,base)+(an.score||0);
+}
+function marketSweepForGame(g,series){
+  const out=[];
+  MARKETS.forEach(m=>{
+    const odd=oddsForMarket(g.text||"",m)[0];
+    if(!odd)return;
+    const probe={...g,market:m,odd};
+    const an=analysisForGame(probe,series);
+    out.push({market:m,odd,an,score:sweepScore({market:m,odd,an})});
+  });
+  return out.sort((a,b)=>b.score-a.score||((b.an.ev??-999)-(a.an.ev??-999))).slice(0,4);
+}
+function marketSweepText(g,series){
+  const sweep=marketSweepForGame(g,series);
+  if(!sweep.length)return "Agente IA odds: sem odds extras lidas";
+  return "Agente IA odds:<br>"+sweep.map(item=>{
+    const cls=item.an.valueOk&&!item.an.coldOdd?"ok":item.an.ev!==null&&item.an.ev>=0?"warn":"bad";
+    const ev=item.an.ev===null?"-":`${item.an.ev.toFixed(1)}%`;
+    const prob=item.an.prob===null?"-":`${item.an.prob.toFixed(1)}%`;
+    return `<span class="${cls}">${esc(item.market.name)}</span> @${item.odd.toFixed(2)} ${esc(item.an.motivo)} | Prob ${prob} | EV ${ev} | Times ${fmtBaseStat(item.an.team)} | Odd ${fmtBaseStat(item.an.odd)}`;
+  }).join("<br>");
 }
 function analyze(){
   const games=readGridGames();
@@ -1812,7 +1860,8 @@ function gamesTable(games,series){
     const liga=ligaStatsText(g.market);
     const detalhe=teamDetailText(g,g.market);
     const placar=scorePullText(scoreModelForGame(g,g.market));
-    return `<tr><td>${esc(g.time)}</td><td>${esc(g.name)}</td><td>${esc(g.market.name)}</td><td>${g.odd.toFixed(2)}</td><td class="${cls}">${esc(an.motivo)}<br>Score ${an.score}</td><td>Prob calibrada ${prob}<br>Odd justa ${fair}<br>Edge odd ${edge}<br>EV real ${ev}<br>EV gale ${evG}<br>${placar}<br>${ciclo}<br>${oddFixa}<br>${horario}<br>${liga}</td><td>Times geral: ${team}<br>${oneXTwoOddsText(g)}<br>${detalhe}<br>Odd atual @${g.odd.toFixed(2)} ${odd}</td><td>${reads}</td></tr>`;
+    const agente=marketSweepText(g,series);
+    return `<tr><td>${esc(g.time)}</td><td>${esc(g.name)}</td><td>${esc(g.market.name)}</td><td>${g.odd.toFixed(2)}</td><td class="${cls}">${esc(an.motivo)}<br>Score ${an.score}</td><td>Prob calibrada ${prob}<br>Odd justa ${fair}<br>Edge odd ${edge}<br>EV real ${ev}<br>EV gale ${evG}<br>${placar}<br>${agente}<br>${ciclo}<br>${oddFixa}<br>${horario}<br>${liga}</td><td>Times geral: ${team}<br>${oneXTwoOddsText(g)}<br>${detalhe}<br>Odd atual @${g.odd.toFixed(2)} ${odd}</td><td>${reads}</td></tr>`;
   }).join("")}</table>`;
 }
 function signalsBox(signals){
