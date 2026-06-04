@@ -139,19 +139,19 @@ function scannerParseTime(value) {
   return h >= 0 && h < 24 && m >= 0 && m < 60 ? h * 60 + m : null;
 }
 
-function scannerScheduleNowMinute() {
+function scannerScheduleNowMinute(at = new Date()) {
   try {
     const parts = new Intl.DateTimeFormat("en-GB", {
       timeZone: scannerScheduleTimeZone,
       hour: "2-digit",
       minute: "2-digit",
       hourCycle: "h23"
-    }).formatToParts(new Date());
+    }).formatToParts(at);
     const h = Number(parts.find(part => part.type === "hour")?.value);
     const m = Number(parts.find(part => part.type === "minute")?.value);
     if (Number.isFinite(h) && Number.isFinite(m)) return h * 60 + m;
   } catch (_error) {}
-  const d = new Date();
+  const d = at instanceof Date ? at : new Date(at);
   return d.getHours() * 60 + d.getMinutes();
 }
 
@@ -162,6 +162,15 @@ function scannerIsFutureTime(value) {
   let diff = minute - now;
   if (diff < -720) diff += 1440;
   return diff >= 0 && diff <= 720;
+}
+
+function scannerIsNearCollectionTime(value, collectedAt, maxAhead = 240) {
+  const minute = scannerParseTime(value);
+  if (minute === null) return false;
+  const base = scannerScheduleNowMinute(new Date(collectedAt || Date.now()));
+  let diff = minute - base;
+  if (diff < 0) diff += 1440;
+  return diff >= 0 && diff <= maxAhead;
 }
 
 function scannerNormalize(value) {
@@ -461,6 +470,7 @@ app.get("/api/scanner-data", requireUserOrAdmin, async (req, res) => {
       if (!fixedRow) continue;
       if (!scannerVisibleFutureSource(fixedRow)) continue;
       if (scannerParseTime(fixedRow.time) === null) continue;
+      if (!scannerIsNearCollectionTime(fixedRow.time, item.created_at)) continue;
       if (!scannerIsFutureTime(fixedRow.time)) continue;
       const rowPlatform = String(fixedRow.platform || payloadPlatform || "").toUpperCase();
       const rawRowHoursValue = fixedRow.hours === undefined || fixedRow.hours === null ? "" : String(fixedRow.hours);
@@ -520,6 +530,7 @@ app.get("/api/scanner-data", requireUserOrAdmin, async (req, res) => {
       if (fixedRow.future && !fixedRow.score) {
         if (!scannerVisibleFutureSource(fixedRow)) continue;
         if (scannerParseTime(fixedRow.time) === null) continue;
+        if (!scannerIsNearCollectionTime(fixedRow.time, item.created_at)) continue;
         if (!scannerIsFutureTime(fixedRow.time)) continue;
         const latestFutureMs = latestFutureMsByLiga.get(resolvedLiga);
         if (!latestFutureMs || new Date(item.created_at).getTime() !== latestFutureMs) continue;
