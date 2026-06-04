@@ -139,6 +139,13 @@ function scannerParseTime(value) {
   return h >= 0 && h < 24 && m >= 0 && m < 60 ? h * 60 + m : null;
 }
 
+function scannerFormatTime(minute) {
+  const normalized = ((minute % 1440) + 1440) % 1440;
+  const h = Math.floor(normalized / 60);
+  const m = normalized % 60;
+  return `${h}.${String(m).padStart(2, "0")}`;
+}
+
 function scannerScheduleNowMinute() {
   try {
     const parts = new Intl.DateTimeFormat("en-GB", {
@@ -238,6 +245,28 @@ function collectScannerOdds(obj, out = {}) {
     if (obj[name] !== undefined) collectScannerOdds(obj[name], out);
   });
   return out;
+}
+
+function scannerRepairLikelyOddTime(row) {
+  const parsed = scannerParseTime(row?.time);
+  if (parsed === null) return row;
+  const rawTime = Number(String(row.time).replace(":", "."));
+  if (!Number.isFinite(rawTime)) return row;
+  const odds = parseScannerOdds(row?.odds || {});
+  const timeLooksLikeOdd = Object.values(odds).some(value => {
+    const n = Number(String(value).replace(",", "."));
+    return Number.isFinite(n) && n.toFixed(2) === rawTime.toFixed(2);
+  });
+  if (!timeLooksLikeOdd) return row;
+  const targetMinute = parsed % 60;
+  const now = scannerScheduleNowMinute();
+  for (let add = 0; add <= 720; add += 1) {
+    const candidate = (now + add) % 1440;
+    if (candidate % 60 === targetMinute) {
+      return { ...row, time: scannerFormatTime(candidate), repairedTimeFrom: row.time };
+    }
+  }
+  return row;
 }
 
 function flattenScannerApi(json, url, liga) {
@@ -445,16 +474,17 @@ app.get("/api/scanner-data", requireUserOrAdmin, async (req, res) => {
     const payloadLiga = Number(payload.liga) || majorityLiga;
     for (const row of payloadRows) {
       if (!row || typeof row !== "object" || row.score || !row.future) continue;
-      if (!scannerVisibleFutureSource(row)) continue;
-      if (!scannerIsFutureTime(row.time)) continue;
-      const rowPlatform = String(row.platform || payloadPlatform || "").toUpperCase();
-      const rawRowHoursValue = row.hours === undefined || row.hours === null ? "" : String(row.hours);
-      const rawRowHours = normalizeScannerHours(row.hours);
+      const fixedRow = scannerRepairLikelyOddTime(row);
+      if (!scannerVisibleFutureSource(fixedRow)) continue;
+      if (!scannerIsFutureTime(fixedRow.time)) continue;
+      const rowPlatform = String(fixedRow.platform || payloadPlatform || "").toUpperCase();
+      const rawRowHoursValue = fixedRow.hours === undefined || fixedRow.hours === null ? "" : String(fixedRow.hours);
+      const rawRowHours = normalizeScannerHours(fixedRow.hours);
       if (rawRowHoursValue && !rawRowHours) continue;
       const rowHours = rawRowHours || payloadHours || (requestedHours ? null : activeHours);
       if (rowPlatform && rowPlatform !== platform) continue;
       if (rowHours !== activeHours) continue;
-      const resolvedLiga = Number(row.liga) || payloadLiga;
+      const resolvedLiga = Number(fixedRow.liga) || payloadLiga;
       if (!resolvedLiga || latestFutureMsByLiga.has(resolvedLiga)) continue;
       latestFutureMsByLiga.set(resolvedLiga, new Date(item.created_at).getTime());
     }
@@ -491,26 +521,27 @@ app.get("/api/scanner-data", requireUserOrAdmin, async (req, res) => {
     for (const row of payloadRows) {
       if (!row || typeof row !== "object") continue;
       if (String(row.api || "") === "result-cache") continue;
-      const rowPlatform = String(row.platform || payloadPlatform || "").toUpperCase();
+      const fixedRow = row.future && !row.score ? scannerRepairLikelyOddTime(row) : row;
+      const rowPlatform = String(fixedRow.platform || payloadPlatform || "").toUpperCase();
       if (rowPlatform && rowPlatform !== platform) continue;
-      const rawRowHoursValue = row.hours === undefined || row.hours === null ? "" : String(row.hours);
-      const rawRowHours = normalizeScannerHours(row.hours);
+      const rawRowHoursValue = fixedRow.hours === undefined || fixedRow.hours === null ? "" : String(fixedRow.hours);
+      const rawRowHours = normalizeScannerHours(fixedRow.hours);
       if (rawRowHoursValue && !rawRowHours) continue;
       const rowHours = rawRowHours || payloadHours || (requestedHours ? null : activeHours);
       if (!rowHours || rowHours !== activeHours) continue;
-      const resolvedLiga = Number(row.liga) || (!row.score && row.future ? payloadLiga : null);
+      const resolvedLiga = Number(fixedRow.liga) || (!fixedRow.score && fixedRow.future ? payloadLiga : null);
       if (!resolvedLiga) continue;
-      if (row.future && !row.score) {
-        if (!scannerVisibleFutureSource(row)) continue;
-        if (!scannerIsFutureTime(row.time)) continue;
+      if (fixedRow.future && !fixedRow.score) {
+        if (!scannerVisibleFutureSource(fixedRow)) continue;
+        if (!scannerIsFutureTime(fixedRow.time)) continue;
         const latestFutureMs = latestFutureMsByLiga.get(resolvedLiga);
         if (!latestFutureMs || new Date(item.created_at).getTime() !== latestFutureMs) continue;
       }
-      let nextRow = row;
-      if (row.future && !row.score) {
-        const apiOddsRow = apiFutureOddsByKey.get(scannerFutureOddsKey(row, resolvedLiga));
-        const mergedOdds = scannerMergeOdds(row, apiOddsRow);
-        nextRow = { ...row, odds: mergedOdds, oddsSource: apiOddsRow ? "screen+api-odds" : "screen" };
+      let nextRow = fixedRow;
+      if (fixedRow.future && !fixedRow.score) {
+        const apiOddsRow = apiFutureOddsByKey.get(scannerFutureOddsKey(fixedRow, resolvedLiga));
+        const mergedOdds = scannerMergeOdds(fixedRow, apiOddsRow);
+        nextRow = { ...fixedRow, odds: mergedOdds, oddsSource: apiOddsRow ? "screen+api-odds" : "screen" };
         if (!scannerHasAnyOdd(nextRow)) continue;
       }
       const key = scannerCanonicalKey(nextRow, resolvedLiga, rowPlatform);

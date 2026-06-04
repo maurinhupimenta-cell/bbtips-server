@@ -215,7 +215,9 @@ function leadingIntFromText(value,min,max){
 }
 function rowHourInfo(cells){
   for(let i=0;i<Math.min(cells.length,4);i++){
-    const hour=leadingIntFromText(cells[i]?.innerText||"",0,23);
+    const txt=cells[i]?.innerText||"";
+    if(/\s+x\s+|@|o25|o35|u25|u35|ambs|ambn|ftc|fte|ftv/i.test(txt))continue;
+    const hour=leadingIntFromText(txt,0,23);
     if(Number.isInteger(hour)&&hour>=0&&hour<=23)return {hour,index:i};
   }
   return null;
@@ -250,10 +252,14 @@ function isReaderVisibleElement(el){
   return st.display!=="none"&&st.visibility!=="hidden"&&Number(st.opacity||1)>0.05;
 }
 function timeFromGameText(txt){
-  const m=String(txt||"").match(/\b(\d{1,2})[.:](\d{2})\b/);
-  if(!m)return "";
-  const h=Number(m[1]),mi=Number(m[2]);
-  return h>=0&&h<24&&mi>=0&&mi<60?`${h}.${String(mi).padStart(2,"0")}`:"";
+  const lines=String(txt||"").split(/\n/).map(x=>x.trim()).filter(Boolean);
+  for(const line of lines.slice(0,4)){
+    const m=line.match(/^(?:hor[aá]rio|hora)?\s*[:\-]?\s*(\d{1,2})[.:](\d{2})$/i);
+    if(!m)continue;
+    const h=Number(m[1]),mi=Number(m[2]);
+    if(h>=0&&h<24&&mi>=0&&mi<60)return `${h}.${String(mi).padStart(2,"0")}`;
+  }
+  return "";
 }
 function hasChildGameCell(el){
   return Array.from(el.children||[]).some(ch=>{
