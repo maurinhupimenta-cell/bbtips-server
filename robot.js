@@ -13,7 +13,7 @@ clearInterval(window[TIMER]);
 ["BBTIPS_FINAL_ROBO_TIMER","BBTIPS_API_ALERTAS_TIMER","BBTIPS_INTERCEPTA_API_TIMER","BBTIPS_PRO_TRADER_TIMER","HB_MULTI_TIMER","BBTIPS_SCANNER_COLLECT_TIMER"].forEach(k=>{try{clearInterval(window[k])}catch(e){}});
 ["bbtips-api-alertas","bbtips-intercepta-api","hb-multi","hb-tips-scanner","bbtips-robo-root","bbtips-robo-canvas","bbtips-robo-desenho","bbtips-marker-handle"].forEach(id=>document.getElementById(id)?.remove());
 
-const CONFIG={market:"over25",tol:0.8,minEV:5,minEdge:3,minProb:0,minOddPct:45,minOddSample:12,minTeamSample:12,maxProximos:4,intervalMs:45000,windows:[120,240,480,960],ligas:[1,2,3,4,5,6],radarLigas:[1,2,3,4],ligaAuto:true,autoRefresh:true,autoApi:true,alerts:true,scannerTelemetry:false,graphRobo:true,horas:"Horas3",filtros:"o15,o25,u25,ambs,ambn,o35,u15,u35,ge5,tgv5,tgc5,ftc,fte,ftv"};
+const CONFIG={market:"over25",tol:0.8,minEV:5,minEdge:3,minProb:0,minOddPct:45,minOddSample:12,minTeamSample:12,maxProximos:6,intervalMs:45000,windows:[120,240,480,960],ligas:[1,2,3,4,5,6],radarLigas:[1,2,3,4],ligaAuto:true,autoRefresh:true,autoApi:true,alerts:true,scannerTelemetry:false,graphRobo:true,horas:"Horas3",filtros:"o15,o25,u25,ambs,ambn,o35,u15,u35,ge5,tgv5,tgc5,ftc,fte,ftv"};
 const LIGA_LABELS={1:"Copa",2:"Euro",3:"Super",4:"Premier",5:"Split",6:"Express"};
 const SCHEDULE_TIME_ZONE="Europe/London";
 let PANEL_HOVER=false;
