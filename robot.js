@@ -10,10 +10,11 @@ let LAST_HIST_SAVE_TS=0;
 document.getElementById(PANEL)?.remove();
 document.getElementById(PANEL+"-style")?.remove();
 clearInterval(window[TIMER]);
-["BBTIPS_FINAL_ROBO_TIMER","BBTIPS_API_ALERTAS_TIMER","BBTIPS_INTERCEPTA_API_TIMER","BBTIPS_PRO_TRADER_TIMER","HB_MULTI_TIMER","BBTIPS_SCANNER_COLLECT_TIMER"].forEach(k=>{try{clearInterval(window[k])}catch(e){}});
+["BBTIPS_FINAL_ROBO_TIMER","BBTIPS_API_ALERTAS_TIMER","BBTIPS_INTERCEPTA_API_TIMER","BBTIPS_PRO_TRADER_TIMER","HB_MULTI_TIMER","BBTIPS_SCANNER_COLLECT_TIMER","BBTIPS_ROBO_ALERT_TIMER","__BBTIPS_GRAPH_ROBO_TIMER"].forEach(k=>{try{clearInterval(window[k])}catch(e){}});
+try{window.__BBTIPS_GRAPH_ROBO_INLINE=false}catch(e){}
 ["bbtips-api-alertas","bbtips-intercepta-api","hb-multi","hb-tips-scanner","bbtips-robo-root","bbtips-robo-canvas","bbtips-robo-desenho","bbtips-marker-handle"].forEach(id=>document.getElementById(id)?.remove());
 
-const CONFIG={market:"over25",tol:0.8,minEV:5,minEdge:3,minProb:0,minOddPct:45,minOddSample:12,minTeamSample:12,maxProximos:6,intervalMs:45000,windows:[120,240,480,960],ligas:[1,2,3,4,5,6],radarLigas:[1,2,3,4],ligaAuto:true,autoRefresh:true,autoApi:true,alerts:true,scannerTelemetry:false,graphRobo:true,horas:"Horas3",filtros:"o15,o25,u25,ambs,ambn,o35,u15,u35,ge5,tgv5,tgc5,ftc,fte,ftv"};
+const CONFIG={market:"over25",tol:0.8,minEV:5,minEdge:3,minProb:0,minOddPct:45,minOddSample:12,minTeamSample:12,maxProximos:6,intervalMs:120000,alertIntervalMs:20000,windows:[120,240,480,960],ligas:[1,2,3,4,5,6],radarLigas:[1,2,3,4],ligaAuto:true,autoRefresh:true,autoApi:false,alerts:true,scannerTelemetry:false,graphRobo:true,horas:"Horas3",filtros:"o15,o25,u25,ambs,ambn,o35,u15,u35,ge5,tgv5,tgc5,ftc,fte,ftv"};
 const LIGA_LABELS={1:"Copa",2:"Euro",3:"Super",4:"Premier",5:"Split",6:"Express"};
 const SCHEDULE_TIME_ZONE="Europe/London";
 let PANEL_HOVER=false;
@@ -1895,6 +1896,17 @@ function manualCollectAndDraw(){
   scheduleDraw(20);
   setTimeout(()=>sendAgenteLocal(rowsForTelemetry(),{force:true}),120);
 }
+function autoAlertTick(){
+  if(DRAWING)return;
+  try{
+    loadApiRowsLight();
+    refreshResultsCacheLight();
+    const a=analyze();
+    notify(a.signals);
+    notifyFundo(a.series);
+    notifyTrendUp();
+  }catch(e){}
+}
 function refreshResultsCacheLight(force=false){
   const now=Date.now();
   if(force||!RESULTS_CACHE.length||now-LAST_RESULTS_REFRESH>90000){
@@ -1979,10 +1991,13 @@ function draw(){
   }
 }
 draw();
-if(CONFIG.autoRefresh)window[TIMER]=setInterval(()=>scheduleDraw(20),CONFIG.intervalMs);
+if(CONFIG.autoRefresh){
+  window.BBTIPS_ROBO_ALERT_TIMER=setInterval(autoAlertTick,CONFIG.alertIntervalMs||20000);
+  window[TIMER]=setInterval(()=>scheduleDraw(50),CONFIG.intervalMs);
+}
 if(CONFIG.autoApi){
   setTimeout(()=>carregarApiDireto({silent:true}).catch(()=>{}),5000);
-  window.BBTIPS_SCANNER_COLLECT_TIMER=setInterval(()=>carregarApiDireto({silent:true}).catch(()=>{}),120000);
+  window.BBTIPS_SCANNER_COLLECT_TIMER=setInterval(()=>carregarApiDireto({silent:true}).catch(()=>{}),180000);
 }
 window.BBTipsRobo={analyze,config:CONFIG,exportar:exportHistory,historico:loadStoredResults};
 })();
@@ -2000,8 +2015,8 @@ window.BBTipsRobo={analyze,config:CONFIG,exportar:exportHistory,historico:loadSt
   const PATTERN_HISTORY_KEY = "bbtips-robo-pattern-history-v2";
   const LAST_PATTERN_KEY = "bbtips-robo-last-pattern-v2";
   const RIGHT_FOCUS_RATIO = 0.34;
-  const LOOP_MS = 2600;
-  const SLOW_SCAN_MS = 6500;
+  const LOOP_MS = 6000;
+  const SLOW_SCAN_MS = 12000;
   const MIN_VISUAL_SIMILARS = 20;
   const SCORE_RE = /(?:^|[^\d])(\d{1,2})\s*[-xX]\s*(\d{1,2})(?=$|[^\d])/g;
   let panel;
@@ -2021,7 +2036,8 @@ window.BBTipsRobo={analyze,config:CONFIG,exportar:exportHistory,historico:loadSt
   function start() {
     makePanel();
     makeCanvas();
-    setInterval(loop, LOOP_MS);
+    try{clearInterval(window.__BBTIPS_GRAPH_ROBO_TIMER)}catch(e){}
+    window.__BBTIPS_GRAPH_ROBO_TIMER=setInterval(loop, LOOP_MS);
     loop();
   }
 
@@ -2214,7 +2230,12 @@ window.BBTipsRobo={analyze,config:CONFIG,exportar:exportHistory,historico:loadSt
       return;
     }
 
-    const histChart = findHistogramChart(chart);
+    const now = Date.now();
+    if (!cachedHistChart || (!cachedHistChart.__bbtipsRegion && !document.contains(cachedHistChart)) || now - lastSlowScan > SLOW_SCAN_MS) {
+      cachedHistChart = findHistogramChart(chart);
+      lastSlowScan = now;
+    }
+    const histChart = cachedHistChart;
     const hist = histChart ? readHistogram(histChart) : [];
     const goalsData = readMatchGoals();
     const market = analyzeBTTSandOver(goalsData);
