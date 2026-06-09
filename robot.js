@@ -1654,6 +1654,145 @@ function scorePullText(stat){
   if(stat.label)return `Placar correto (${esc(stat.label)}, ${stat.j} jogos): ${stat.topScores.join(" | ")}<br>Mercado nessa base: ${stat.green}/${stat.j} ${Number.isFinite(stat.marketP)?stat.marketP.toFixed(1)+"%":"-"}${stat.topOdds.length?` | Odds: ${stat.topOdds.join(" | ")}`:""}`;
   return `Placar correto apos ${stat.score}: ${stat.topScores.join(" | ")}${stat.topOdds.length?`<br>Odds: ${stat.topOdds.join(" | ")}`:""}`;
 }
+function anchorMarket(){
+  return MARKETS.find(m=>m.key==="over35")||market();
+}
+function normAnchorText(v){
+  return esc(v||"").normalize("NFD").replace(/[\u0300-\u036f]/g,"").toLowerCase().replace(/\s+/g," ").trim();
+}
+function anchorTeamNames(name){
+  return String(name||"").split(/\s+x\s+/i).map(normAnchorText).filter(Boolean);
+}
+function anchorOddExact(v){
+  const n=Number(v);
+  return Number.isFinite(n)?n.toFixed(2):null;
+}
+function rowAnchorKeys(row,m){
+  const keys=[];
+  anchorTeamNames(row?.name).forEach(t=>keys.push({key:`time:${t}`,label:`time ${t}`}));
+  const odds=oddsForMarket(row?.txt||txtFromApiRow(row)||"",m);
+  odds.forEach(o=>{
+    const exact=anchorOddExact(o);
+    const band=oddBand(o);
+    if(exact)keys.push({key:`odd:${exact}`,label:`odd O3.5 @${exact}`});
+    if(band)keys.push({key:`faixa:${band}`,label:`faixa O3.5 ${band}`});
+  });
+  const seen=new Set();
+  return keys.filter(k=>{
+    if(seen.has(k.key))return false;
+    seen.add(k.key);
+    return true;
+  });
+}
+function anchorFutureGames(games){
+  const liga=activeLiga();
+  const m=anchorMarket();
+  const seen=new Set();
+  const fromApi=API_ROWS
+    .filter(r=>r&&r.future&&!r.score&&(!liga||Number(r.liga)===Number(liga)))
+    .filter(r=>isVisibleFutureRow(r))
+    .filter(r=>!r.time||isFuture(r.time))
+    .map(r=>({time:r.time,name:r.name,odd:oddFromObj(r.odds,m),market:m,text:txtFromApiRow(r),liga:r.liga,txt:txtFromApiRow(r)}))
+    .filter(g=>g.name)
+    .sort((a,b)=>(parseTime(a.time)??9999)-(parseTime(b.time)??9999)||String(a.name).localeCompare(String(b.name)));
+  const base=fromApi.length?fromApi:(games||[]).map(g=>({...g,market:m,txt:g.text||g.txt||""}));
+  return base.filter(g=>{
+    const key=[g.time,g.name].join("|");
+    if(seen.has(key))return false;
+    seen.add(key);
+    return true;
+  }).slice(0,Math.max(6,CONFIG.maxProximos||6));
+}
+function anchorStatsMap(m){
+  const rows=orderedResults().filter(r=>r&&r.score&&r.name).slice(-540);
+  const map={};
+  for(let i=0;i<rows.length;i++){
+    const keys=rowAnchorKeys(rows[i],m);
+    if(!keys.length)continue;
+    [1,2,3,4].forEach(offset=>{
+      const target=rows[i+offset];
+      if(!target?.score)return;
+      const paid=paysMarket(target.score,m);
+      keys.forEach(k=>{
+        const id=`${k.key}|${offset}`;
+        if(!map[id])map[id]={...k,offset,j:0,g:0,last:[]};
+        map[id].j++;
+        if(paid)map[id].g++;
+        if(paid&&map[id].last.length<3)map[id].last.push(`${target.name} ${scoreKey(target.score)}`);
+      });
+    });
+  }
+  Object.values(map).forEach(s=>{s.p=s.j?s.g/s.j*100:null});
+  return map;
+}
+function anchorAttention(games){
+  const m=anchorMarket();
+  const future=anchorFutureGames(games);
+  const stats=anchorStatsMap(m);
+  const alerts=[];
+  const addAlert=(anchor,target,offset,stat,source)=>{
+    if(!target||!stat||stat.j<3||stat.g<3||stat.p<60)return;
+    alerts.push({
+      source,
+      offset,
+      anchor,
+      target,
+      stat,
+      score:stat.p+Math.min(20,stat.j*2)+(stat.key.startsWith("time:")?8:0)
+    });
+  };
+  future.forEach((anchor,i)=>{
+    const keys=rowAnchorKeys(anchor,m);
+    [1,2,3,4].forEach(offset=>{
+      const target=future[i+offset];
+      keys.forEach(k=>addAlert(anchor,target,offset,stats[`${k.key}|${offset}`],"proximo"));
+    });
+  });
+  orderedResults().slice(-4).forEach(anchor=>{
+    if(resultAge(anchor)>18)return;
+    const keys=rowAnchorKeys(anchor,m);
+    [1,2,3,4].forEach(offset=>{
+      const target=future[offset-1];
+      keys.forEach(k=>addAlert(anchor,target,offset,stats[`${k.key}|${offset}`],"passou"));
+    });
+  });
+  const seen=new Set();
+  return alerts
+    .sort((a,b)=>b.score-a.score||b.stat.j-a.stat.j)
+    .filter(a=>{
+      const key=[a.target?.time,a.target?.name,a.stat.key,a.offset].join("|");
+      if(seen.has(key))return false;
+      seen.add(key);
+      return true;
+    })
+    .slice(0,5);
+}
+function anchorAttentionBox(games){
+  const alerts=anchorAttention(games);
+  if(!alerts.length)return `<div class="sig"><b class="warn">Atencao time/odd ancora</b><br>Sem ancora forte agora para Over 3.5. Regra: minimo 3 acertos e 60% quando o time/odd aparece e paga de 1 a 4 jogos depois.</div>`;
+  return `<div class="sig"><b class="ok">Atencao time/odd ancora - Over 3.5</b><br>${alerts.map(a=>{
+    const passou=a.source==="passou"?"ja passou":"vai passar";
+    const last=a.stat.last.length?` | exemplos: ${a.stat.last.map(esc).join(" / ")}`:"";
+    return `<span class="ok">${esc(a.stat.label)} ${passou}</span> -> +${a.offset} casa: <b>${esc(a.target.time||"-")} ${esc(a.target.name||"-")}</b> | O3.5 ${a.stat.g}/${a.stat.j} ${a.stat.p.toFixed(0)}%${last}`;
+  }).join("<br>")}</div>`;
+}
+function notifyAnchors(games){
+  if(!CONFIG.alerts)return;
+  const alerts=anchorAttention(games).filter(a=>a.stat.j>=3&&a.stat.g>=3&&a.stat.p>=70);
+  if(!alerts.length)return;
+  let old=[];try{old=JSON.parse(localStorage.getItem(SEEN+"_ANCHOR")||"[]")}catch(e){}
+  const seen=new Set(old);
+  alerts.slice(0,3).forEach(a=>{
+    const k=[a.target?.time,a.target?.name,a.stat.key,a.offset,Math.round(a.stat.p)].join("|");
+    if(seen.has(k))return;
+    seen.add(k);
+    beep();
+    const msg=`${a.stat.label} -> +${a.offset} casa | Over 3.5 ${a.stat.g}/${a.stat.j} ${a.stat.p.toFixed(0)}% | alvo ${a.target?.time||"-"} ${a.target?.name||"-"}`;
+    if("Notification" in window&&Notification.permission==="granted")new Notification("BBTips ancora O3.5",{body:msg});
+    else if("Notification" in window&&Notification.permission!=="denied")Notification.requestPermission();
+  });
+  safeSetJson(SEEN+"_ANCHOR",[...seen],80);
+}
 function statusPayStats(m){
   const out={OBSERVAR:{g:0,j:0,streak:0,last:""},AGUARDAR:{g:0,j:0,streak:0,last:""}};
   out.OBSERVAR.last="modo leve: auditoria pesada desligada";
@@ -1905,6 +2044,7 @@ function autoAlertTick(){
     notify(a.signals);
     notifyFundo(a.series);
     notifyTrendUp();
+    notifyAnchors(a.games);
   }catch(e){}
 }
 function refreshResultsCacheLight(force=false){
@@ -1952,6 +2092,7 @@ function draw(){
   notify(a.signals);
   notifyFundo(a.series);
   notifyTrendUp();
+  notifyAnchors(a.games);
   const fundos=[...globalFundos(a.series),...visualFundos(a.series)];
   const fundoTxt=fundos.length?` | FUNDO ${fundos.map(f=>`${f.w}:${f.p.toFixed(1)}%`).join(" ")}`:"";
   const ligaAtual=activeLiga();
@@ -1961,7 +2102,7 @@ function draw(){
   <button id="rb-api">Atualizar API</button><button id="rb-hist">Historico</button><button id="rb-scan">Atualizar</button><button id="rb-som">Som</button><button id="rb-min">Minimizar</button><button id="rb-close">Fechar</button></span></div>
   <div class="body">
     ${multiLeagueRadarBox()}
-    <h3>Proximos jogos da liga atual</h3>${trendUpBox()}${marketRankingBox()}${gamesTable(a.games,a.series)}
+    <h3>Proximos jogos da liga atual</h3>${trendUpBox()}${marketRankingBox()}${anchorAttentionBox(a.games)}${gamesTable(a.games,a.series)}
     <h3>Sinais por minima calculada pelos resultados</h3>${signalsBox(a.signals)}
     <h3>Pagamento do mercado aberto</h3>${statusStatsBox()}
     <h3>Conferencia dos ultimos resultados</h3>${resultsCheckTable()}
