@@ -1788,8 +1788,10 @@ function normAnchorText(v){
   return esc(v||"").normalize("NFD").replace(/[\u0300-\u036f]/g,"").toLowerCase().replace(/\s+/g," ").trim();
 }
 function anchorTeamNames(name){
-  return String(name||"").split(/\s+x\s+/i).map(normAnchorText).filter(Boolean);
+  const invalid=new Set(["cio","out","time","jogo","casa","fora","empate","resultado","sem liga"]);
+  return String(name||"").split(/\s+x\s+/i).map(normAnchorText).filter(t=>t.length>=3&&!invalid.has(t)&&!/@|\d/.test(t));
 }
+function alertBrand(){return isCarameloPage()?"Caramelo Robo":"BBTips Robo"}
 function anchorOddExact(v){
   const n=Number(v);
   return Number.isFinite(n)?n.toFixed(2):null;
@@ -1900,7 +1902,7 @@ function anchorAttentionBox(games){
   return `<div class="sig"><b class="ok">Atencao time/odd ancora - Over 3.5</b><br>${alerts.map(a=>{
     const passou=a.source==="passou"?"ja passou":"vai passar";
     const last=a.stat.last.length?` | exemplos: ${a.stat.last.map(esc).join(" / ")}`:"";
-    return `<span class="ok">${esc(a.stat.label)} ${passou}</span> -> +${a.offset} casa: <b>${esc(a.target.time||"-")} ${esc(a.target.name||"-")}</b> | O3.5 ${a.stat.g}/${a.stat.j} ${a.stat.p.toFixed(0)}%${last}`;
+    return `<span class="ok">ancora ${esc(a.anchor?.time||"-")} ${esc(a.anchor?.name||a.stat.label)} ${passou}</span> | padrao ${esc(a.stat.label)} -> +${a.offset} casa: <b>${esc(a.target.time||"-")} ${esc(a.target.name||"-")}</b> | O3.5 ${a.stat.g}/${a.stat.j} ${a.stat.p.toFixed(0)}%${last}`;
   }).join("<br>")}</div>`;
 }
 function notifyAnchors(games){
@@ -1914,8 +1916,8 @@ function notifyAnchors(games){
     if(seen.has(k))return;
     seen.add(k);
     beep();
-    const msg=`${a.stat.label} -> +${a.offset} casa | Over 3.5 ${a.stat.g}/${a.stat.j} ${a.stat.p.toFixed(0)}% | alvo ${a.target?.time||"-"} ${a.target?.name||"-"}`;
-    if("Notification" in window&&Notification.permission==="granted")new Notification("BBTips ancora O3.5",{body:msg});
+    const msg=`ancora ${a.anchor?.time||"-"} ${a.anchor?.name||a.stat.label} | ${a.stat.label} -> +${a.offset} casa | Over 3.5 ${a.stat.g}/${a.stat.j} ${a.stat.p.toFixed(0)}% | alvo ${a.target?.time||"-"} ${a.target?.name||"-"}`;
+    if("Notification" in window&&Notification.permission==="granted")new Notification(`${alertBrand()} ancora O3.5`,{body:msg});
     else if("Notification" in window&&Notification.permission!=="denied")Notification.requestPermission();
   });
   safeSetJson(SEEN+"_ANCHOR",[...seen],80);
@@ -2013,7 +2015,7 @@ function notify(signals){
     seen.add(k);beep();
     const tipo=s.tipo||"FUNDO";
     const msg=`${ligaNome()} | ${tipo} ${s.best.w} | ${s.game.market.name} @${s.game.odd} | ${s.game.time} ${s.game.name} | EV linha ${Number.isFinite(s.best.ev)?s.best.ev.toFixed(1):"-"}%`;
-    if("Notification" in window&&Notification.permission==="granted")new Notification("BBTips sinal",{body:msg});
+    if("Notification" in window&&Notification.permission==="granted")new Notification(`${alertBrand()} sinal`,{body:msg});
     else if("Notification" in window&&Notification.permission!=="denied")Notification.requestPermission();
   });
   safeSetJson(SEEN,[...seen],60);
@@ -2032,7 +2034,7 @@ function notifyFundo(series){
     beep();
     const base=`${f.g}/${f.j} ${f.p.toFixed(1)}% | minima ${f.min.toFixed(1)}%`;
     const msg=`${ligaNome()} | BATEU A MINIMA ${f.w} jogos | ${market().name} | ${base}`;
-    if("Notification" in window&&Notification.permission==="granted")new Notification("BBTips: bateu a minima",{body:msg});
+    if("Notification" in window&&Notification.permission==="granted")new Notification(`${alertBrand()}: bateu a minima`,{body:msg});
     else if("Notification" in window&&Notification.permission!=="denied")Notification.requestPermission();
   });
   safeSetJson(SEEN+"_FUNDO",[...seen],60);
@@ -2050,7 +2052,7 @@ function notifyTrendUp(){
     seen.add(k);
     beep();
     const msg=`${ligaNome()} | ${market().name} | 15j ${s.p15.toFixed(1)}% | 30j ${s.g30}/30 ${s.p30.toFixed(1)}% | antes ${s.pPrev.toFixed(1)}% | base ${s.pBase.toFixed(1)}% | MACD ${s.macd.toFixed(3)}/${s.signal.toFixed(3)} | hist ${s.hist.toFixed(3)} subindo`;
-    if("Notification" in window&&Notification.permission==="granted")new Notification(`BBTips: ${s.tipo}`,{body:msg});
+    if("Notification" in window&&Notification.permission==="granted")new Notification(`${alertBrand()}: ${s.tipo}`,{body:msg});
     else if("Notification" in window&&Notification.permission!=="denied")Notification.requestPermission();
   });
   safeSetJson(SEEN+"_TRENDUP",[...seen],60);
