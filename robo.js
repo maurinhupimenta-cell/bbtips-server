@@ -314,7 +314,8 @@ function hasResult(txt){
   const clean=String(txt||"");
   const lines=clean.split(/\n/).map(x=>x.trim()).filter(Boolean);
   if(/\bOUT\b/i.test(clean))return true;
-  if(lines.slice(1,4).some(l=>/^\d+\s*[-x]\s*\d+$/.test(l)))return true;
+  if(lines.some(l=>/\s+x\s+.*\d+\+?\s*[-x]\s*\d+\+?$/i.test(l)))return true;
+  if(lines.slice(1,4).some(l=>/^\d+\+?\s*[-x]\s*\d+\+?$/.test(l)))return true;
   return false;
 }
 function gameName(txt){
@@ -322,7 +323,7 @@ function gameName(txt){
   const parts=line.split(/\s+x\s+/i);
   if(parts.length>=2){
     const a=esc(parts[0]).slice(-45);
-    const b=esc(parts.slice(1).join(" x ")).replace(/\s+(o25|o35|u25|ambs|ambn|o5|5\+).*/i,"").slice(0,45);
+    const b=esc(parts.slice(1).join(" x ")).replace(/\d+\+?\s*[-x]\s*\d+\+?$/,"").replace(/\s+(o15|u15|o25|o35|u25|u35|ambs|ambn|o5|5\+|ge5|ftc|fte|ftv).*/i,"").slice(0,45);
     return `${a} x ${b}`;
   }
   return esc(line).slice(0,90);
@@ -353,10 +354,7 @@ function collectExtraOdds(obj,out={}){
   return out;
 }
 function apiScore(raw){
-  const m=String(raw||"").match(/(\d+)\s*[-x]\s*(\d+)/i);
-  if(!m)return null;
-  const a=Number(m[1]),b=Number(m[2]);
-  return Number.isFinite(a)&&Number.isFinite(b)?{a,b,t:a+b}:null;
+  return scoreFromResult(raw);
 }
 function apiTime(row,line){
   const h=row.Horario??row.horario??row.Hora??row.hora??line?.Horario??line?.horario??"";
@@ -365,7 +363,104 @@ function apiTime(row,line){
   if(h!==""&&min!==undefined)return `${Number(h)}.${String(min).padStart(2,"0")}`;
   return String(h||"");
 }
+function carameloLigaFromUrl(url){
+  const map={copa:1,euro:2,super:3,premier:4,split:5,express:6};
+  try{
+    const u=new URL(String(url||""),location.href);
+    const m=u.pathname.toLowerCase().match(/\/final\/([^/]+)\.json$/);
+    if(m&&map[m[1]])return map[m[1]];
+  }catch(e){}
+  return null;
+}
+function isCarameloUrl(url){
+  const u=String(url||"");
+  return /caramelotips\.com\.br/i.test(u)||/\/final\/(copa|euro|super|premier|split|express)\.json/i.test(u);
+}
+function isCarameloPage(){
+  return /caramelotips\.com\.br/i.test(location.hostname||"")||isCarameloUrl(location.href);
+}
+function carameloApiUrl(liga){
+  const names={1:"copa",2:"euro",3:"super",4:"premier",5:"split",6:"express"};
+  const name=names[Number(liga)];
+  return name?new URL(`/final/${name}.json`,location.origin).href:"";
+}
+function carameloDatasetUrl(){
+  try{
+    return sessionStorage.getItem("datasetPath")||sessionStorage.getItem("ligaAtual")||location.href;
+  }catch(e){return location.href}
+}
+function cellTextValue(cell){
+  if(cell&&typeof cell==="object")return String(cell.v??cell.f??cell.text??cell.value??"");
+  return String(cell??"");
+}
+function parseCarameloCell(raw,hour,liga,url,ri,ci){
+  raw=String(raw||"").replace(/\r/g,"").trim();
+  if(!raw||!/\s+x\s+/i.test(raw)||!/@/.test(raw))return null;
+  const lines=raw.split(/\n+/).map(x=>x.trim()).filter(Boolean);
+  const minuteLine=lines.slice().reverse().find(l=>/^\d{1,2}$/.test(l));
+  const minute=Number(minuteLine);
+  if(!Number.isInteger(hour)||hour<0||hour>23||!Number.isInteger(minute)||minute<0||minute>59)return null;
+  const first=lines.find(l=>/\s+x\s+/i.test(l))||"";
+  const parts=first.split(/\s+x\s+/i);
+  if(parts.length<2)return null;
+  const home=parts.shift().trim();
+  let away=parts.join(" x ").trim();
+  let scoreText="";
+  const scoreAtEnd=away.match(/^(.*?)(\d+\+?\s*[-x]\s*\d+\+?)$/);
+  if(scoreAtEnd){
+    away=scoreAtEnd[1].trim();
+    scoreText=scoreAtEnd[2];
+  }
+  const scoreLine=lines.slice(1).find(l=>/^\d+\+?\s*[-x]\s*\d+\+?$/i.test(l));
+  if(!scoreText&&scoreLine)scoreText=scoreLine;
+  away=away.replace(/\s+(?:o15|u15|o25|u25|o35|u35|ambs|ambn|ftc|fte|ftv|ge5|tgv5|tgc5)@.*$/i,"").trim();
+  if(!home||!away)return null;
+  const score=scoreFromResult(scoreText);
+  const odds=oddsObjectFromText(raw);
+  if(!score&&!Object.keys(odds).length)return null;
+  const time=`${hour}.${String(minute).padStart(2,"0")}`;
+  const name=esc(`${home} x ${away}`);
+  return {
+    key:["caramelo",liga||"",time,name,score?`${score.a}-${score.b}`:"f",ri,ci].join("|"),
+    liga,
+    time,
+    name,
+    score,
+    odds,
+    future:!score,
+    platform:"BET365",
+    hours:currentHours(),
+    api:url||"caramelo",
+    idx:ri*100+ci,
+    txt:raw.slice(0,500)
+  };
+}
+function flattenCarameloApi(json,url){
+  const rows=Array.isArray(json?.table?.rows)?json.table.rows:[];
+  if(!rows.length)return [];
+  const liga=carameloLigaFromUrl(url)||activeLiga();
+  const out=[];
+  rows.forEach((row,ri)=>{
+    const cells=Array.isArray(row?.c)?row.c:[];
+    const hour=leadingIntFromText(cellTextValue(cells[0]),0,23);
+    if(!Number.isInteger(hour))return;
+    cells.slice(1).forEach((cell,ci)=>{
+      const parsed=parseCarameloCell(cellTextValue(cell),hour,liga,url,ri,ci+1);
+      if(parsed)out.push(parsed);
+    });
+  });
+  return out;
+}
+function liveCarameloRows(){
+  try{
+    const json=window.LOADED_JSON||window.__payloadTempoRealPendente?.json||window.__CARAMELO_JSON;
+    if(!json?.table?.rows)return [];
+    return flattenCarameloApi(json,carameloDatasetUrl());
+  }catch(e){return []}
+}
 function flattenApi(json,url){
+  const caramelo=flattenCarameloApi(json,url);
+  if(caramelo.length)return caramelo;
   const out=[];
   const liga=ligaFromUrl(url);
   const linhas=Array.isArray(json?.Linhas)?json.Linhas:Array.isArray(json?.linhas)?json.linhas:Array.isArray(json)?json:[];
@@ -397,12 +492,19 @@ function flattenApi(json,url){
   });
   return out;
 }
+function mergeApiRows(...sets){
+  const by={};
+  sets.flat().forEach(r=>{
+    if(!r||typeof r!=="object")return;
+    by[r.key||JSON.stringify([r.api,r.liga,r.time,r.name,r.idx])]=r;
+  });
+  return Object.values(by).slice(-5000);
+}
 function saveApiRows(rows){
   if(!rows.length)return;
-  const by={};
-  try{JSON.parse(localStorage.getItem(API_STORE)||"[]").forEach(r=>by[r.key]=r)}catch(e){}
-  rows.forEach(r=>by[r.key]=r);
-  API_ROWS=Object.values(by).slice(-5000);
+  let stored=[];
+  try{stored=JSON.parse(localStorage.getItem(API_STORE)||"[]")}catch(e){}
+  API_ROWS=mergeApiRows(stored,rows);
   localStorage.setItem(API_STORE,JSON.stringify(API_ROWS));
   sendAgenteLocal(rowsForTelemetry(rows));
 }
@@ -514,7 +616,7 @@ function gameRowsForTelemetry(games=[]){
 function isVisibleFutureRow(r){
   if(!r||!r.future||r.score)return false;
   const api=String(r.api||"");
-  return api==="dom-grid"||api==="robot-game"||/futebolvirtual/i.test(api);
+  return api==="dom-grid"||api==="robot-game"||/futebolvirtual|caramelotips|\/final\//i.test(api);
 }
 function rowsForTelemetry(seed=[]){
   const by={};
@@ -598,6 +700,11 @@ function sendResultadosAgenteLocal(){
 }
 function loadApiRows(){
   try{API_ROWS=JSON.parse(localStorage.getItem(API_STORE)||"[]")}catch(e){API_ROWS=[]}
+  const live=liveCarameloRows();
+  if(live.length){
+    API_ROWS=mergeApiRows(API_ROWS,live);
+    try{localStorage.setItem(API_STORE,JSON.stringify(API_ROWS))}catch(e){}
+  }
 }
 function rowScoreText(r){return r?.score?`${r.score.a}-${r.score.b}`:""}
 function resultKey(r){
@@ -623,7 +730,7 @@ function saveStoredResults(rows){
   try{localStorage.setItem(HIST_STORE,JSON.stringify(rows.slice(0,2500)))}catch(e){}
 }
 function processApiText(url,text,opts={}){
-  if(!/futebolvirtual|Linhas|Colunas|TimeA|TimeB|Odds|Resultado/i.test(String(url)+" "+String(text).slice(0,500)))return;
+  if(!/futebolvirtual|Linhas|Colunas|TimeA|TimeB|Odds|Resultado|caramelotips|\/final\/|\"table\"|o25@|o35@|ambs@/i.test(String(url)+" "+String(text).slice(0,500)))return;
   try{
     const rows=flattenApi(JSON.parse(text),url);
     if(opts.returnRows)return rows;
@@ -653,6 +760,8 @@ function hookApi(){
   }
 }
 function ligaFromUrl(url){
+  const caramelo=carameloLigaFromUrl(url);
+  if(caramelo)return caramelo;
   try{
     const v=new URL(url,location.href).searchParams.get("liga");
     return v?Number(v):null;
@@ -660,6 +769,10 @@ function ligaFromUrl(url){
 }
 function activeLiga(){
   if(!CONFIG.ligaAuto)return null;
+  try{
+    const caramelo=carameloLigaFromUrl(carameloDatasetUrl());
+    if(caramelo)return caramelo;
+  }catch(e){}
   const names={express:6,copa:1,euro:2,super:3,premier:4,split:5};
   let best=null,bestScore=-1;
   document.querySelectorAll("button,div,span,a,li").forEach(el=>{
@@ -776,16 +889,30 @@ async function carregarApiDireto(opts={}){
   try{
     const ligaAtual=activeLiga();
     const ligas=ligaAtual?[ligaAtual]:CONFIG.radarLigas;
-    for(const liga of ligas){
-      for(const futuro of [false,true]){
-        const url=apiUrl(liga,futuro);
+    if(isCarameloPage()){
+      for(const liga of ligas){
+        const url=carameloApiUrl(liga);
+        if(!url)continue;
         try{
           const r=await fetch(url,{credentials:"include",cache:"no-store"});
           const txt=await r.text();
           const rows=processApiText(url,txt,{returnRows:true})||[];
           if(rows.length)allRows.push(...rows);
-          if(!r.ok)erros.push(`${liga} ${futuro?"futuro":"hist"} ${r.status}`);
-        }catch(e){erros.push(`${liga} ${futuro?"futuro":"hist"} falhou`)}
+          if(!r.ok)erros.push(`${liga} caramelo ${r.status}`);
+        }catch(e){erros.push(`${liga} caramelo falhou`)}
+      }
+    }else{
+      for(const liga of ligas){
+        for(const futuro of [false,true]){
+          const url=apiUrl(liga,futuro);
+          try{
+            const r=await fetch(url,{credentials:"include",cache:"no-store"});
+            const txt=await r.text();
+            const rows=processApiText(url,txt,{returnRows:true})||[];
+            if(rows.length)allRows.push(...rows);
+            if(!r.ok)erros.push(`${liga} ${futuro?"futuro":"hist"} ${r.status}`);
+          }catch(e){erros.push(`${liga} ${futuro?"futuro":"hist"} falhou`)}
+        }
       }
     }
     if(allRows.length)saveApiRows(allRows);
@@ -1172,7 +1299,7 @@ function trendUpBox(){
   return sinais.map(s=>`<div class="sig"><b class="ok">${s.tipo}</b> ${esc(market().name)} | 15j ${s.p15.toFixed(1)}% | 30j ${s.g30}/30 ${s.p30.toFixed(1)}% | antes ${s.pPrev.toFixed(1)}% | base ${s.pBase.toFixed(1)}% | MACD ${s.macd.toFixed(3)}/${s.signal.toFixed(3)} | hist ${s.hist.toFixed(3)} subindo</div>`).join("");
 }
 function scoreFromResult(txt){
-  const m=String(txt||"").match(/(\d+)\s*[-x]\s*(\d+)/);
+  const m=String(txt||"").match(/(\d+)\+?\s*[-x]\s*(\d+)\+?/);
   if(!m)return null;
   const a=Number(m[1]),b=Number(m[2]);
   return Number.isFinite(a)&&Number.isFinite(b)?{a,b,t:a+b}:null;
