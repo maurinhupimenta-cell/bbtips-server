@@ -78,6 +78,8 @@ function removeRobotPanel() {
       clearInterval(window.BBTIPS_INTERCEPTA_API_TIMER);
       clearInterval(window.BBTIPS_PRO_TRADER_TIMER);
       clearInterval(window.BBTIPS_SCANNER_COLLECT_TIMER);
+      clearInterval(window.BBTIPS_ROBO_ALERT_TIMER);
+      clearInterval(window.__BBTIPS_GRAPH_ROBO_TIMER);
       clearInterval(window.HB_MULTI_TIMER);
       document.getElementById('bbtips-final-robo')?.remove();
       document.getElementById('bbtips-final-robo-style')?.remove();
