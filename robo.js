@@ -2003,7 +2003,19 @@ function analysisForGame(g,series){
   const graph=liveGraphCombo(g.market);
   const combo=comboScoreForGame({market:g.market,minHits,prob,probEdge,ev,baseForte,coldOdd,cycle,graph});
   const status=combo.ready?"ENTRADA":combo.score>=combo.profile.threshold-12?"OBSERVAR":"PASSAR";
-  const motivo=coldOdd?"ODD FRIA":prob===null?"SEM BASE":!graph?"SEM GRAFICO":graph.histBad?"HISTOGRAMA CONTRA":!combo.minimumGood?"SEM MINIMA":!combo.probStrong?"PROB/EDGE BAIXO":!combo.evStrong?"EV BAIXO":!baseForte?"BASE FRACA":combo.ready?"COMBO FORTE":status;
+  const probFail=Number.isFinite(prob)&&prob<combo.profile.minProb?`PROB ${prob.toFixed(1)}<${combo.profile.minProb}`:"";
+  const edgeFail=Number.isFinite(probEdge)&&probEdge<combo.profile.minEdge?`EDGE ${probEdge.toFixed(1)}<${combo.profile.minEdge}`:"";
+  const evFail=Number.isFinite(ev)&&ev<combo.profile.minEv?`EV ${ev.toFixed(1)}<${combo.profile.minEv}`:"";
+  let motivo=status;
+  if(combo.ready)motivo="COMBO FORTE";
+  if(!baseForte)motivo="BASE FRACA";
+  if(!combo.evStrong)motivo=evFail||"EV BAIXO";
+  if(!combo.probStrong)motivo=probFail||edgeFail||"PROB/EDGE BAIXO";
+  if(!combo.minimumGood)motivo="SEM MINIMA";
+  if(graph?.histBad)motivo="HISTOGRAMA CONTRA";
+  if(!graph)motivo="SEM GRAFICO";
+  if(prob===null)motivo="SEM BASE";
+  if(coldOdd)motivo="ODD FRIA";
   return {reads,best,bestEv,team,odd,prob,fairOdd,breakEven,probEdge,ev,evGale,score:combo.score,status,motivo,coldOdd,valueOk,baseForte,cycle,combo};
 }
 function analyze(){
@@ -2109,7 +2121,8 @@ function gamesTable(games,series){
     const odd=`${fmtBaseStat(an.odd)}${an.coldOdd?" ODD FRIA":""}`;
     const ciclo=cycleText(an.cycle||marketCycleStats(g.market));
     const combo=an.combo;
-    const comboTxt=combo?`Combo ${combo.score}/${combo.profile.threshold} | Hist ${combo.graph?.histGood?"OK":"NAO"} | Minima ${combo.minimumGood?"OK":"NAO"} | Ciclo ${combo.cycleStrong?"FORTE":combo.cycleBuilding?"FORMANDO":"NAO"}`:`Combo --`;
+    const histTxt=!combo?.graph?"SEM DADO":combo.graph.histGood?"OK":combo.graph.histBad?"CONTRA":"SEM CONF.";
+    const comboTxt=combo?`Combo ${combo.score}/${combo.profile.threshold} | Hist ${histTxt} | Minima ${combo.minimumGood?"OK":"NAO"} | Ciclo ${combo.cycleStrong?"FORTE":combo.cycleBuilding?"FORMANDO":"NAO"}`:`Combo --`;
     const oddFixa=exactOddText(exactOddStats(g,g.market));
     const horario=hourStatsText(hourStatsForGame(g,g.market));
     const liga=ligaStatsText(g.market);
@@ -2285,7 +2298,7 @@ if(CONFIG.autoApi){
   setTimeout(()=>carregarApiDireto({silent:true}).catch(()=>{}),5000);
   window.BBTIPS_SCANNER_COLLECT_TIMER=setInterval(()=>carregarApiDireto({silent:true}).catch(()=>{}),180000);
 }
-window.BBTipsRobo={analyze,config:CONFIG,exportar:exportHistory,historico:loadStoredResults};
+window.BBTipsRobo={analyze,config:CONFIG,exportar:exportHistory,historico:loadStoredResults,refresh:()=>scheduleDraw(50)};
 })();
 
 ;(()=>{
@@ -2540,7 +2553,15 @@ window.BBTipsRobo={analyze,config:CONFIG,exportar:exportHistory,historico:loadSt
         color: "#ffd54a"
       };
     }
-    window.__BBTIPS_GRAPH_COMBO={...a.graphState,marketKey:window.BBTipsRobo?.config?.market||"",histLabel:a.hist,sinal:a.sinal,recomendacao:a.recomendacao,ts:Date.now()};
+    const comboNow={...a.graphState,marketKey:window.BBTipsRobo?.config?.market||"",histLabel:a.hist,sinal:a.sinal,recomendacao:a.recomendacao,ts:Date.now()};
+    const comboSig=[comboNow.marketKey,Math.round(comboNow.zonePct/5),Math.round(comboNow.force/10),comboNow.histPositive?1:0,comboNow.histWeakening?1:0,Math.sign(comboNow.slope||0),comboNow.sinal].join("|");
+    const prevCombo=window.__BBTIPS_GRAPH_COMBO;
+    window.__BBTIPS_GRAPH_COMBO={...comboNow,signature:comboSig};
+    const renderAge=Date.now()-Number(window.__BBTIPS_GRAPH_COMBO_RENDER_TS||0);
+    if(!prevCombo||renderAge>=30000||(prevCombo.signature!==comboSig&&renderAge>=12000)){
+      window.__BBTIPS_GRAPH_COMBO_RENDER_TS=Date.now();
+      setTimeout(()=>window.BBTipsRobo?.refresh?.(),80);
+    }
     write(a);
     draw(chart, focusedPoints, a, histChart);
   }

@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "BBTips Robô",
-  "version": "1.0.45",
+  "version": "1.0.46",
   "description": "Injeta o robô BBTips somente após ativação da licença.",
   "permissions": ["storage", "activeTab", "scripting"],
   "host_permissions": [
