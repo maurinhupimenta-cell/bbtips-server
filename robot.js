@@ -1922,21 +1922,6 @@ function notifyAnchors(games){
   });
   safeSetJson(SEEN+"_ANCHOR",[...seen],80);
 }
-function statusPayStats(m){
-  const out={OBSERVAR:{g:0,j:0,streak:0,last:""},AGUARDAR:{g:0,j:0,streak:0,last:""}};
-  out.OBSERVAR.last="modo leve: auditoria pesada desligada";
-  out.AGUARDAR.last="modo leve: auditoria pesada desligada";
-  return out;
-}
-function statusStatsBox(){
-  const s=statusPayStats(market());
-  const row=st=>{
-    const x=s[st],p=x.j?x.g/x.j*100:null;
-    const cls=p===null?"warn":p>=50?"ok":"bad";
-    return `<tr><td>${st}</td><td>${x.g}/${x.j} ${p===null?"-":p.toFixed(1)+"%"}</td><td class="${x.streak?"bad":"ok"}">${x.streak} sem pagar</td><td class="${cls}">${esc(x.last||"sem green recente")}</td></tr>`;
-  };
-  return `<table><tr><th>Status</th><th>Pagou no mercado aberto</th><th>Sequencia atual</th><th>Ultimo pagamento</th></tr>${row("OBSERVAR")}${row("AGUARDAR")}</table>`;
-}
 function weightedProb(graphP,team,odd){
   const parts=[];
   if(Number.isFinite(graphP))parts.push({v:graphP,w:2});
@@ -1945,6 +1930,45 @@ function weightedProb(graphP,team,odd){
   if(!parts.length)return null;
   const sw=parts.reduce((a,b)=>a+b.w,0);
   return parts.reduce((a,b)=>a+b.v*b.w,0)/sw;
+}
+function comboProfile(m){
+  if(m?.key==="ambas_sim")return {threshold:65,minProb:52,minEdge:4,minEv:5};
+  if(m?.key==="over25")return {threshold:68,minProb:48,minEdge:5,minEv:5};
+  if(m?.key==="over35")return {threshold:72,minProb:30,minEdge:6,minEv:6};
+  return {threshold:70,minProb:45,minEdge:6,minEv:6};
+}
+function liveGraphCombo(m){
+  const g=window.__BBTIPS_GRAPH_COMBO;
+  if(!g||Date.now()-Number(g.ts||0)>30000)return null;
+  if(g.marketKey&&m?.key&&g.marketKey!==m.key)return null;
+  const zone=Number(g.zonePct),force=Number(g.force),slope=Number(g.slope);
+  if(!Number.isFinite(zone)||!Number.isFinite(force)||!Number.isFinite(slope))return null;
+  const histGood=Boolean(g.histPositive)&&!Boolean(g.histWeakening)&&zone<=68&&slope>=-0.08;
+  const histBad=zone>=75||Boolean(g.histWeakening)||slope<=-0.22;
+  return {...g,zone,force,slope,histGood,histBad};
+}
+function comboScoreForGame({market:m,minHits,prob,probEdge,ev,baseForte,coldOdd,cycle,graph}){
+  const profile=comboProfile(m);
+  const minimumGood=minHits.length>0;
+  const longMinimum=minHits.some(r=>r.w>=480);
+  const cycleStrong=cycle?.cur==="RED"&&Number.isFinite(cycle.avgRed)&&cycle.streak>=cycle.avgRed;
+  const cycleBuilding=cycle?.cur==="RED"&&Number(cycle.pressao)>=35;
+  const probStrong=Number.isFinite(prob)&&prob>=profile.minProb&&Number.isFinite(probEdge)&&probEdge>=profile.minEdge;
+  const evStrong=Number.isFinite(ev)&&ev>=profile.minEv;
+  let score=0;
+  if(graph?.histGood)score+=25;
+  if(minimumGood)score+=25;
+  if(cycleStrong)score+=15;else if(cycleBuilding)score+=8;
+  if(probStrong)score+=15;
+  if(evStrong)score+=10;
+  if(baseForte)score+=10;
+  if(longMinimum)score+=5;
+  if(graph?.histBad)score-=25;
+  score=Math.max(0,Math.min(100,score));
+  if(!minimumGood||!graph?.histGood)score=Math.min(score,64);
+  if(coldOdd||!probStrong||!evStrong)score=Math.min(score,54);
+  const ready=score>=profile.threshold&&minimumGood&&graph?.histGood&&probStrong&&evStrong&&baseForte&&!coldOdd;
+  return {score:Math.round(score),ready,profile,minimumGood,longMinimum,cycleStrong,cycleBuilding,probStrong,evStrong,graph};
 }
 function analysisForGame(g,series){
   const resultReads=calcResultWindows(g.market).map(r=>({
@@ -1971,25 +1995,16 @@ function analysisForGame(g,series){
   const evGale=p===null?null:(p*(g.odd-1)+(1-p)*(p*(g.odd-2)+(1-p)*(-2)))*100;
   const probOk=probEdge!==null&&probEdge>=CONFIG.minEdge;
   const evOk=ev!==null&&ev>=CONFIG.minEV;
-  let score=0;
-  if(best?.fundo)score+=35;
-  if(evOk)score+=20;
-  if(evGale!==null&&evGale>0)score+=20;
-  if(team&&Number.isFinite(team.p))score+=Math.max(0,Math.min(20,(team.p-50)/2));
-  if(odd&&Number.isFinite(odd.p))score+=Math.max(0,Math.min(20,(odd.p-50)/2));
-  if(minHits.some(r=>r.w>=480))score+=10;
   const strongBase=(team&&Number.isFinite(team.p)&&team.p>=50)||(odd&&Number.isFinite(odd.p)&&odd.p>=50)||(!team&&!odd&&prob!==null);
   const coldOdd=odd&&odd.j>=CONFIG.minOddSample&&Number.isFinite(odd.p)&&odd.p<CONFIG.minOddPct;
   const valueOk=evOk&&probOk;
   const baseForte=(team&&team.j>=CONFIG.minTeamSample&&Number.isFinite(team.p)&&team.p>=52)||(odd&&odd.j>=CONFIG.minOddSample&&Number.isFinite(odd.p)&&odd.p>=52);
-  if(evGale!==null&&evGale>=CONFIG.minEV&&valueOk&&baseForte&&!coldOdd)score=Math.max(score,70);
-  if(score<55&&valueOk&&baseForte&&!coldOdd)score=55;
-  if(score<45&&valueOk&&!coldOdd)score=45;
-  if(!valueOk)score=Math.min(score,44);
-  if(coldOdd)score=Math.min(score,44);
-  const status=score>=45?"OBSERVAR":"PASSAR";
-  const motivo=coldOdd?"ODD FRIA":prob===null?"SEM BASE":!evOk?"EV NEGATIVO":!probOk?"EDGE BAIXO":baseForte?status:"OBSERVAR CAUTELA";
-  return {reads,best,bestEv,team,odd,prob,fairOdd,breakEven,probEdge,ev,evGale,score:Math.round(score),status,motivo,coldOdd,valueOk,baseForte};
+  const cycle=marketCycleStats(g.market);
+  const graph=liveGraphCombo(g.market);
+  const combo=comboScoreForGame({market:g.market,minHits,prob,probEdge,ev,baseForte,coldOdd,cycle,graph});
+  const status=combo.ready?"ENTRADA":combo.score>=combo.profile.threshold-12?"OBSERVAR":"PASSAR";
+  const motivo=coldOdd?"ODD FRIA":prob===null?"SEM BASE":!graph?"SEM GRAFICO":graph.histBad?"HISTOGRAMA CONTRA":!combo.minimumGood?"SEM MINIMA":!combo.probStrong?"PROB/EDGE BAIXO":!combo.evStrong?"EV BAIXO":!baseForte?"BASE FRACA":combo.ready?"COMBO FORTE":status;
+  return {reads,best,bestEv,team,odd,prob,fairOdd,breakEven,probEdge,ev,evGale,score:combo.score,status,motivo,coldOdd,valueOk,baseForte,cycle,combo};
 }
 function analyze(){
   const games=readGridGames();
@@ -1998,7 +2013,7 @@ function analyze(){
   games.forEach(g=>{
     g.analysis=analysisForGame(g,series);
     const hits=g.analysis.reads.filter(r=>r.ready&&r.fundo&&(r.fundo30||r.fundoMin)&&Number.isFinite(r.ev));
-    const podeSinal=g.analysis.valueOk&&g.analysis.baseForte&&g.analysis.evGale!==null&&g.analysis.evGale>=CONFIG.minEV&&!g.analysis.coldOdd;
+    const podeSinal=g.analysis.combo?.ready;
     if(hits.length&&podeSinal){
       signals.push({game:g,hits,best:hits.sort((a,b)=>b.w-a.w||b.ev-a.ev)[0]});
     }
@@ -2013,8 +2028,8 @@ function notify(signals){
     const k=`${s.game.market.key}|${s.game.time}|${s.game.name}|${s.best.w}|${Math.round(s.best.cur)}`;
     if(seen.has(k))return;
     seen.add(k);beep();
-    const tipo=s.tipo||"FUNDO";
-    const msg=`${ligaNome()} | ${tipo} ${s.best.w} | ${s.game.market.name} @${s.game.odd} | ${s.game.time} ${s.game.name} | EV linha ${Number.isFinite(s.best.ev)?s.best.ev.toFixed(1):"-"}%`;
+    const combo=s.game.analysis?.combo;
+    const msg=`${ligaNome()} | COMBO ${combo?.score??"-"}/${combo?.profile?.threshold??"-"} | ${s.game.market.name} @${s.game.odd} | ${s.game.time} ${s.game.name} | Hist OK + Minima ${s.best.w} + EV ${Number.isFinite(s.game.analysis?.ev)?s.game.analysis.ev.toFixed(1):"-"}%`;
     if("Notification" in window&&Notification.permission==="granted")new Notification(`${alertBrand()} sinal`,{body:msg});
     else if("Notification" in window&&Notification.permission!=="denied")Notification.requestPermission();
   });
@@ -2084,7 +2099,7 @@ function gamesTable(games,series){
       const tag=r.fundo30?" <30":r.fundoMin?" MINIMA":"";
       return `<span class="${cls}">${r.w}: ${r.ready?`${r.g}/${r.j} ${r.p.toFixed(1)}% min ${r.min.toFixed(1)}${tag} EV linha ${Number.isFinite(r.ev)?r.ev.toFixed(1):"-"}`:`parcial ${r.g}/${r.j} de ${r.w}`}</span>`;
     }).join("<br>");
-    const cls=an.status==="OBSERVAR"?"warn":"bad";
+    const cls=an.status==="ENTRADA"?"ok":an.status==="OBSERVAR"?"warn":"bad";
     const prob=an.prob===null?"-":`${an.prob.toFixed(1)}%`;
     const fair=an.fairOdd===null?"-":an.fairOdd.toFixed(2);
     const ev=an.ev===null?"-":`${an.ev.toFixed(1)}%`;
@@ -2092,22 +2107,24 @@ function gamesTable(games,series){
     const evG=an.evGale===null?"-":`${an.evGale.toFixed(1)}%`;
     const team=fmtBaseStat(an.team);
     const odd=`${fmtBaseStat(an.odd)}${an.coldOdd?" ODD FRIA":""}`;
-    const ciclo=cycleText(marketCycleStats(g.market));
+    const ciclo=cycleText(an.cycle||marketCycleStats(g.market));
+    const combo=an.combo;
+    const comboTxt=combo?`Combo ${combo.score}/${combo.profile.threshold} | Hist ${combo.graph?.histGood?"OK":"NAO"} | Minima ${combo.minimumGood?"OK":"NAO"} | Ciclo ${combo.cycleStrong?"FORTE":combo.cycleBuilding?"FORMANDO":"NAO"}`:`Combo --`;
     const oddFixa=exactOddText(exactOddStats(g,g.market));
     const horario=hourStatsText(hourStatsForGame(g,g.market));
     const liga=ligaStatsText(g.market);
     const detalhe=teamDetailText(g,g.market);
     const placar=scorePullText(scoreModelForGame(g,g.market));
-    return `<tr><td>${esc(g.time)}</td><td>${esc(g.name)}</td><td>${esc(g.market.name)}</td><td>${g.odd.toFixed(2)}</td><td class="${cls}">${esc(an.motivo)}<br>Score ${an.score}</td><td>Prob calibrada ${prob}<br>Odd justa ${fair}<br>Edge odd ${edge}<br>EV real ${ev}<br>EV gale ${evG}<br>${placar}<br>${ciclo}<br>${oddFixa}<br>${horario}<br>${liga}</td><td>Times geral: ${team}<br>${oneXTwoOddsText(g)}<br>${detalhe}<br>Odd atual @${g.odd.toFixed(2)} ${odd}</td><td>${reads}</td></tr>`;
+    return `<tr><td>${esc(g.time)}</td><td>${esc(g.name)}</td><td>${esc(g.market.name)}</td><td>${g.odd.toFixed(2)}</td><td class="${cls}">${esc(an.motivo)}<br>${comboTxt}</td><td>Prob calibrada ${prob}<br>Odd justa ${fair}<br>Edge odd ${edge}<br>EV real ${ev}<br>EV gale ${evG}<br>${placar}<br>${ciclo}<br>${oddFixa}<br>${horario}<br>${liga}</td><td>Times geral: ${team}<br>${oneXTwoOddsText(g)}<br>${detalhe}<br>Odd atual @${g.odd.toFixed(2)} ${odd}</td><td>${reads}</td></tr>`;
   }).join("")}</table>`;
 }
 function signalsBox(signals){
   const fundos=globalFundos([]).filter(f=>f.ready&&f.j>=f.w);
   const fundoHtml=fundos.length?fundos.map(f=>`<div class="sig"><b class="ok">BATEU MINIMA ${f.w}</b> ${esc(market().name)} | ${f.g}/${f.j} ${f.p.toFixed(1)}% | minima ${f.min.toFixed(1)}%</div>`).join(""):"";
-  if(!signals.length&&!fundoHtml)return "<p class='warn'>Sem sinal agora. O som toca quando a linha calculada do mercado bater fundo/minima em 120, 240, 480 ou 960.</p>";
+  if(!signals.length&&!fundoHtml)return "<p class='warn'>Sem Combo forte agora. Alertas de ancora, minima e tendencia continuam ativos; entrada somente quando o Combo atingir o limite do mercado.</p>";
   return signals.map(s=>{
-    const tipo=s.tipo||"FUNDO";
-    return `<div class="sig"><b class="ok">${tipo} ${s.best.w}</b> ${esc(s.game.market.name)} @${s.game.odd.toFixed(2)} | ${esc(s.game.time)} ${esc(s.game.name)} | atual ${Number.isFinite(s.best.cur)?s.best.cur.toFixed(1):"-"} min ${Number.isFinite(s.best.min)?s.best.min.toFixed(1):"-"} EV linha ${Number.isFinite(s.best.ev)?s.best.ev.toFixed(1):"-"}%</div>`;
+    const combo=s.game.analysis?.combo;
+    return `<div class="sig"><b class="ok">COMBO FORTE ${combo?.score??"-"}/${combo?.profile?.threshold??"-"}</b> ${esc(s.game.market.name)} @${s.game.odd.toFixed(2)} | ${esc(s.game.time)} ${esc(s.game.name)} | hist OK | minima ${s.best.w} | EV ${Number.isFinite(s.game.analysis?.ev)?s.game.analysis.ev.toFixed(1):"-"}%</div>`;
   }).join("")+fundoHtml;
 }
 function trendBox(series){
@@ -2233,7 +2250,6 @@ function draw(){
     ${multiLeagueRadarBox()}
     <h3>Proximos jogos da liga atual</h3>${trendUpBox()}${marketRankingBox()}${anchorAttentionBox(a.games)}${gamesTable(a.games,a.series)}
     <h3>Sinais por minima calculada pelos resultados</h3>${signalsBox(a.signals)}
-    <h3>Pagamento do mercado aberto</h3>${statusStatsBox()}
     <h3>Conferencia dos ultimos resultados</h3>${resultsCheckTable()}
     <h3>Linha calculada pelos resultados fechados</h3>${trendBox(a.series)}
   </div>`;
@@ -2524,6 +2540,7 @@ window.BBTipsRobo={analyze,config:CONFIG,exportar:exportHistory,historico:loadSt
         color: "#ffd54a"
       };
     }
+    window.__BBTIPS_GRAPH_COMBO={...a.graphState,marketKey:window.BBTipsRobo?.config?.market||"",histLabel:a.hist,sinal:a.sinal,recomendacao:a.recomendacao,ts:Date.now()};
     write(a);
     draw(chart, focusedPoints, a, histChart);
   }
