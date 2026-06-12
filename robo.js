@@ -2298,7 +2298,7 @@ if(CONFIG.autoApi){
   setTimeout(()=>carregarApiDireto({silent:true}).catch(()=>{}),5000);
   window.BBTIPS_SCANNER_COLLECT_TIMER=setInterval(()=>carregarApiDireto({silent:true}).catch(()=>{}),180000);
 }
-window.BBTipsRobo={analyze,config:CONFIG,exportar:exportHistory,historico:loadStoredResults,refresh:()=>scheduleDraw(50)};
+window.BBTipsRobo={analyze,config:CONFIG,exportar:exportHistory,historico:loadStoredResults};
 })();
 
 ;(()=>{
@@ -2553,15 +2553,7 @@ window.BBTipsRobo={analyze,config:CONFIG,exportar:exportHistory,historico:loadSt
         color: "#ffd54a"
       };
     }
-    const comboNow={...a.graphState,marketKey:window.BBTipsRobo?.config?.market||"",histLabel:a.hist,sinal:a.sinal,recomendacao:a.recomendacao,ts:Date.now()};
-    const comboSig=[comboNow.marketKey,Math.round(comboNow.zonePct/5),Math.round(comboNow.force/10),comboNow.histPositive?1:0,comboNow.histWeakening?1:0,Math.sign(comboNow.slope||0),comboNow.sinal].join("|");
-    const prevCombo=window.__BBTIPS_GRAPH_COMBO;
-    window.__BBTIPS_GRAPH_COMBO={...comboNow,signature:comboSig};
-    const renderAge=Date.now()-Number(window.__BBTIPS_GRAPH_COMBO_RENDER_TS||0);
-    if(!prevCombo||renderAge>=30000||(prevCombo.signature!==comboSig&&renderAge>=12000)){
-      window.__BBTIPS_GRAPH_COMBO_RENDER_TS=Date.now();
-      setTimeout(()=>window.BBTipsRobo?.refresh?.(),80);
-    }
+    window.__BBTIPS_GRAPH_COMBO={...a.graphState,marketKey:window.BBTipsRobo?.config?.market||"",histLabel:a.hist,sinal:a.sinal,recomendacao:a.recomendacao,ts:Date.now()};
     write(a);
     draw(chart, focusedPoints, a, histChart);
   }
