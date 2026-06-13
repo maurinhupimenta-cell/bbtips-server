@@ -2317,7 +2317,7 @@ function graphPanelIsOpen(){
 function syncScannerWithGraph(){
   const graphOpen=graphPanelIsOpen();
   const wasMin=P.classList.contains("min");
-  if(graphOpen&&!SCANNER_MANUAL_OPEN){
+  if(graphOpen){
     P.classList.add("min");
     SCANNER_GRAPH_AUTO_MIN=true;
   }else if(!graphOpen&&SCANNER_GRAPH_AUTO_MIN){
@@ -2471,11 +2471,11 @@ window.BBTipsRobo={
   const Z = 2147483647;
   const PANEL_POS_KEY = "bbtips-robo-panel-pos";
   const PANEL_MIN_KEY = "bbtips-robo-panel-min";
-  const PANEL_COMPACT_MIGRATION_KEY = "bbtips-robo-panel-compact-1.0.52";
+  const PANEL_COMPACT_MIGRATION_KEY = "bbtips-robo-panel-compact-1.0.53";
   const PATTERN_HISTORY_KEY = "bbtips-robo-pattern-history-v2";
   const LAST_PATTERN_KEY = "bbtips-robo-last-pattern-v2";
-  const RIGHT_FOCUS_RATIO = 0.34;
-  const LOOP_MS = 6000;
+  const RIGHT_FOCUS_RATIO = 0.50;
+  const LOOP_MS = 10000;
   const SLOW_SCAN_MS = 12000;
   const MIN_VISUAL_SIMILARS = 20;
   const SCORE_RE = /(?:^|[^\d])(\d{1,2})\s*[-xX]\s*(\d{1,2})(?=$|[^\d])/g;
@@ -2513,7 +2513,13 @@ window.BBTipsRobo={
 
     panel = document.createElement("div");
     panel.id = "bbtips-robo-root";
-    const savedPos = readJson(PANEL_POS_KEY, { left: 18, top: 90 });
+    const compactMigrationDone = localStorage.getItem(PANEL_COMPACT_MIGRATION_KEY) === "1";
+    const defaultPos = { left: Math.max(8, window.innerWidth - 328), top: 90 };
+    const savedPos = compactMigrationDone ? readJson(PANEL_POS_KEY, defaultPos) : defaultPos;
+    if (!compactMigrationDone) {
+      localStorage.setItem(PANEL_POS_KEY, JSON.stringify(defaultPos));
+      localStorage.setItem(PANEL_MIN_KEY, "1");
+    }
     panel.setAttribute(
       "style",
       [
@@ -2631,7 +2637,7 @@ window.BBTipsRobo={
     body.style.display = minimized ? "none" : "block";
     if (summary) summary.style.display = minimized ? "block" : "none";
     min.textContent = minimized ? "+" : "_";
-    panel.style.setProperty("width", minimized ? "300px" : "300px", "important");
+    panel.style.setProperty("width", minimized ? "260px" : "300px", "important");
   }
 
   function setGraphPanelActive(active) {
@@ -2674,12 +2680,21 @@ window.BBTipsRobo={
     if (!panel || !canvas) return;
     try{window.BBTipsRobo?.syncLayout?.()}catch(e){}
 
-    const nativeGraph = readNativeGraphData() || readLibraryGraphData();
-    if (nativeGraph?.pending) {
-      setGraphPanelActive(Boolean(nativeGraph.chart));
+    const nativeCandidate = readNativeGraphData();
+    if (nativeCandidate?.waiting) {
+      setGraphPanelActive(true);
+      write({
+        status: nativeCandidate.message || "aguardando os pontos do grafico...",
+        sinal: "AGUARDANDO DADOS",
+        color: "#ffd54a",
+        forca: "--", zona: "--", direcao: "--", virada: "--", pagamento: "--", pgtoScore: "--", hist: "--",
+        btts: "--", over: "--", over35: "--", gols: "--", seq: "--", recomendacao: "AGUARDAR", acao: "Aguardar",
+        nota: "O painel do grafico abriu, mas o site ainda nao publicou os pontos. A leitura por pixels foi pausada para nao travar a pagina."
+      });
       clearDraw();
       return;
     }
+    const nativeGraph = nativeCandidate || readLibraryGraphData();
     const chart = nativeGraph?.chart || biggestChart();
     if (!chart) {
       setGraphPanelActive(false);
@@ -2724,6 +2739,11 @@ window.BBTipsRobo={
     const market = analyzeBTTSandOver(goalsData);
     const focusedPoints = focusRightEdge(points);
     const a = analyze(focusedPoints, hist, market, points);
+    if (nativeGraph) {
+      a.status += " | fonte DADOS DO SITE";
+    } else {
+      a.status = focusedPoints.length + " pts foco | leitura visual aproximada | hist " + (hist?.length || 0) + " barras";
+    }
     try {
       rememberPattern(goalsData, a.graphState);
       a.backtest = analyzeVisualBacktest(a.graphState);
@@ -2742,10 +2762,9 @@ window.BBTipsRobo={
     const publishedKey=[graphCombo.marketKey,graphCombo.zonePct,graphCombo.force,graphCombo.histPositive?1:0,graphCombo.histWeakening?1:0,Math.round(Number(graphCombo.slope||0)*100),graphCombo.histLabel].join("|");
     if(publishedKey!==lastPublishedGraphKey){
       lastPublishedGraphKey=publishedKey;
-      try{window.BBTipsRobo?.refresh?.()}catch(e){}
     }
     write(a);
-    if (nativeGraph) drawFrame(chart, a.color);
+    if (nativeGraph) clearDraw();
     else draw(chart, focusedPoints, a, histChart);
   }
 
@@ -2757,53 +2776,107 @@ window.BBTipsRobo={
     return null;
   }
 
-  function syncNativeGraphMarket() {
-    const desired = desiredNativeMarket();
-    const select = document.getElementById("linhaFT");
-    if (!desired || !select) return true;
-    if (String(select.value || "") === desired.select) return true;
-    select.value = desired.select;
-    select.dispatchEvent(new Event("change", { bubbles: true }));
-    try { window.__graficoPrincipalNovoAPI?.solicitarAtualizacaoGrafico?.(); } catch (e) {}
+  function nativeMarketKey(value) {
+    const market = String(value || "").toLowerCase();
+    if (market === "over25") return "over25";
+    if (market === "over35") return "over35";
+    if (market === "ambas sim") return "ambas_sim";
+    return "";
+  }
+
+  function nativeMarketPays(game, market) {
+    const home = Number(game?.casa);
+    const away = Number(game?.fora);
+    if (!Number.isFinite(home) || !Number.isFinite(away)) return false;
+    const total = home + away;
+    if (market === "over25") return total > 2.5;
+    if (market === "over35") return total > 3.5;
+    if (market === "ambas sim") return home > 0 && away > 0;
     return false;
   }
 
+  function internalResultsFromLoadedJson() {
+    const rows = window.LOADED_JSON?.table?.rows;
+    if (!Array.isArray(rows)) return [];
+    const results = [];
+    for (let rowIndex = 0; rowIndex < rows.length && results.length < 420; rowIndex += 1) {
+      const cells = Array.isArray(rows[rowIndex]?.c) ? rows[rowIndex].c : [];
+      for (let cellIndex = cells.length - 1; cellIndex >= 1 && results.length < 420; cellIndex -= 1) {
+        const raw = String(cells[cellIndex]?.v || "").replace(/\r/g, "").trim();
+        if (!raw) continue;
+        const lines = raw.split("\n").map((line) => line.trim()).filter(Boolean);
+        const score = lines.slice(1).join("\n").match(/(\d+)\+?\s*-\s*(\d+)\+?/);
+        const stuck = lines[0]?.match(/^(.*?\s+x\s+.*?)(\d+)\+?\s*-\s*(\d+)\+?\s*$/i);
+        const match = score || (stuck ? [stuck[0], stuck[2], stuck[3]] : null);
+        if (!match) continue;
+        results.push({ casa: Number(match[1]), fora: Number(match[2]) });
+      }
+    }
+    return results;
+  }
+
+  function calculateNativeSeries(market) {
+    const results = internalResultsFromLoadedJson();
+    const requested = Math.max(40, parseInt(document.getElementById("qtd")?.value, 10) || 120);
+    const used = results.slice(0, requested);
+    const blockCount = Math.floor(used.length / 20);
+    if (blockCount < 2) return [];
+    const blocks = Array.from({ length: blockCount }, (_, index) => used.slice(index * 20, index * 20 + 20));
+    const newest = blocks[blocks.length - 1];
+    const initial = newest.filter((game) => nativeMarketPays(game, market)).length / newest.length * 100;
+    const points = [initial];
+    for (let block = blockCount - 2; block >= 0; block -= 1) {
+      for (let index = 19; index >= 0; index -= 1) {
+        const currentPays = nativeMarketPays(blocks[block][index], market);
+        const referencePays = nativeMarketPays(blocks[block + 1][index], market);
+        points.push(points[points.length - 1] + (currentPays && !referencePays ? 5 : !currentPays && referencePays ? -5 : 0));
+      }
+    }
+    return points;
+  }
+
   function readNativeGraphData() {
-    const desired = desiredNativeMarket();
-    if (!desired) return null;
-    const nativeRuntime = Boolean(document.getElementById("grafico") || window.__graficoPrincipalNovoAPI);
-    const marketReady = syncNativeGraphMarket();
+    const nativeRuntime = Boolean(
+      document.getElementById("graficoPrincipalNovoPanel") ||
+      document.getElementById("linhaFT") ||
+      document.getElementById("grafico") ||
+      window.__graficoPrincipalNovoAPI ||
+      window.__gpLastCfg ||
+      window.__ultimoPontosSelecionado
+    );
+    if (!nativeRuntime) return null;
     const cfg = window.__gpLastCfg;
     const selectedDataset = Array.isArray(cfg?.datasets)
       ? cfg.datasets.find((dataset) => Number(dataset?.order) === 0 && dataset?._tipo)
       : null;
-    const cfgMarket = String(selectedDataset?._tipo || "").toLowerCase();
-    const values = Array.isArray(cfg?.pontosSelecionado)
-      ? cfg.pontosSelecionado.map(Number).filter(Number.isFinite)
-      : [];
+    const activeMarket = String(cfg?.tipoLinha || selectedDataset?._tipo || document.getElementById("linhaFT")?.value || "").toLowerCase();
+    const marketKey = nativeMarketKey(activeMarket);
+    const cfgValues = Array.isArray(cfg?.pontosSelecionado) ? cfg.pontosSelecionado : [];
+    const siteValues = Array.isArray(window.__ultimoPontosSelecionado) ? window.__ultimoPontosSelecionado : [];
+    const calculatedValues = cfgValues.length >= 20 || siteValues.length >= 20 ? [] : calculateNativeSeries(activeMarket);
+    const rawValues = cfgValues.length >= 20 ? cfgValues : siteValues.length >= 20 ? siteValues : calculatedValues;
+    const values = rawValues.map(Number).filter(Number.isFinite);
 
-    if (!marketReady || cfgMarket !== desired.select || values.length < 20) {
-      const now = Date.now();
-      if (now - lastNativeRefresh > 7000 && window.LOADED_JSON) {
-        lastNativeRefresh = now;
-        try {
-          const api = window.__graficoPrincipalNovoAPI;
-          if (typeof api?.carregarDados === "function") Promise.resolve(api.carregarDados(window.LOADED_JSON)).catch(() => {});
-          else if (typeof window.graficoPrincipalNovoCarregarDados === "function") Promise.resolve(window.graficoPrincipalNovoCarregarDados(window.LOADED_JSON)).catch(() => {});
-        } catch (e) {}
-      }
-      return nativeRuntime ? { pending: true, chart: document.getElementById("grafico") } : null;
+    if (!marketKey) {
+      return { waiting: true, message: "Selecione Over 2.5, Over 3.5 ou Ambas Sim no grafico." };
+    }
+    if (values.length < 20) {
+      return { waiting: true, message: "Aguardando o site publicar os pontos internos do grafico." };
     }
 
-    const points = values.map((value, index) => ({ x: index, y: -value }));
+    const points = values.map((value, index) => ({ x: index, y: -value, v: value }));
     const hist = nativeMacdHistogram(values).map((value, index) => ({ x: index, y: 0, v: value }));
     return {
       chart: document.getElementById("grafico") || biggestChart(),
       points,
       hist,
-      marketKey: desired.key,
+      marketKey,
       source: "caramelo-data",
-      sourcePath: "window.__gpLastCfg.pontosSelecionado"
+      sourcePath: cfgValues.length >= 20
+        ? "window.__gpLastCfg.pontosSelecionado"
+        : siteValues.length >= 20
+          ? "window.__ultimoPontosSelecionado"
+          : "recalculado de window.LOADED_JSON"
     };
   }
 
@@ -2815,7 +2888,7 @@ window.BBTipsRobo={
     const histValues=Array.isArray(direct?.histValues)?direct.histValues.map(Number).filter(Number.isFinite):[];
     return {
       chart: biggestChart(),
-      points:values.map((value,index)=>({x:index,y:-value})),
+      points:values.map((value,index)=>({x:index,y:-value,v:value})),
       hist:histValues.map((value,index)=>({x:index,y:0,v:value})),
       marketKey:String(window.BBTipsRobo?.config?.market||""),
       source:"site-data",
@@ -3277,11 +3350,26 @@ window.BBTipsRobo={
   }
 
   function readMatchGoals() {
-    const domGoals = readDomMatchGoals();
-    if (domGoals.length >= 8) return domGoals;
+    const internalGoals = internalResultsFromLoadedJson()
+      .slice(0, 20)
+      .reverse()
+      .map((game, index) => ({
+        key: "interno:" + index + ":" + game.casa + "x" + game.fora,
+        x: index,
+        y: 0,
+        total: game.casa + game.fora,
+        btts: game.casa > 0 && game.fora > 0,
+        over25: game.casa + game.fora >= 3,
+        over35: game.casa + game.fora >= 4,
+        score: game.casa + "x" + game.fora
+      }));
+    if (internalGoals.length >= 8) return internalGoals;
 
     const storedGoals = readStoredMatchGoals();
     if (storedGoals.length >= 8) return storedGoals;
+
+    const domGoals = readDomMatchGoals();
+    if (domGoals.length >= 8) return domGoals;
 
     return domGoals.length ? domGoals : storedGoals;
   }
@@ -3625,7 +3713,8 @@ window.BBTipsRobo={
     const range = Math.max(1, max - min);
     const currentPoint = smooth[smooth.length - 1];
     const currentPointRaw = points.slice().sort((a, b) => a.x - b.x).pop() || currentPoint;
-    const current = Number.isFinite(Number(currentPointRaw?.v)) ? Number(currentPointRaw.v) : currentPoint.v;
+    const rawCurrent = Number.isFinite(Number(currentPointRaw?.v)) ? Number(currentPointRaw.v) : NaN;
+    const current = Number.isFinite(rawCurrent) ? rawCurrent : currentPoint.v;
     const zonePct = Math.round(((current - min) / range) * 100);
     const zone =
       zonePct <= 25 ? "Fundo" :
