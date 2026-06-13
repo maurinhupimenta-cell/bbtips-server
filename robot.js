@@ -54,7 +54,7 @@ css.id=PANEL+"-style";
 css.textContent=`
 #${PANEL}{position:fixed;left:6px;right:6px;bottom:6px;z-index:999999;background:#101820;color:#eaf7ff;border:1px solid #29d7ff;border-radius:6px;font:12px Arial;box-shadow:0 8px 24px #0009}
 #${PANEL}.min .body{display:none}
-#${PANEL}.min{right:auto;width:min(760px,calc(100vw - 24px));max-width:calc(100vw - 24px)}
+#${PANEL}.min{right:auto;width:min(520px,calc(100vw - 24px));max-width:calc(100vw - 24px)}
 #${PANEL}.min .top{flex-wrap:nowrap;min-width:0}
 #${PANEL}.min .top>b{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 #${PANEL} .top{display:flex;gap:8px;align-items:center;justify-content:space-between;background:#162331;padding:7px;flex-wrap:wrap}
@@ -2471,6 +2471,7 @@ window.BBTipsRobo={
   const Z = 2147483647;
   const PANEL_POS_KEY = "bbtips-robo-panel-pos";
   const PANEL_MIN_KEY = "bbtips-robo-panel-min";
+  const PANEL_COMPACT_MIGRATION_KEY = "bbtips-robo-panel-compact-1.0.52";
   const PATTERN_HISTORY_KEY = "bbtips-robo-pattern-history-v2";
   const LAST_PATTERN_KEY = "bbtips-robo-last-pattern-v2";
   const RIGHT_FOCUS_RATIO = 0.34;
@@ -2579,8 +2580,13 @@ window.BBTipsRobo={
     const drag = document.getElementById("bbtips-drag");
     const min = document.getElementById("bbtips-min");
     const body = document.getElementById("bbtips-body");
+    const compactMigrationDone = localStorage.getItem(PANEL_COMPACT_MIGRATION_KEY) === "1";
     const savedMinimized = localStorage.getItem(PANEL_MIN_KEY);
-    const minimized = savedMinimized === null ? true : savedMinimized === "1";
+    const minimized = compactMigrationDone ? savedMinimized !== "0" : true;
+    if (!compactMigrationDone) {
+      localStorage.setItem(PANEL_COMPACT_MIGRATION_KEY, "1");
+      localStorage.setItem(PANEL_MIN_KEY, "1");
+    }
     setMinimized(minimized);
 
     drag.addEventListener("pointerdown", (event) => {
@@ -3242,7 +3248,7 @@ window.BBTipsRobo={
     const weakening = positive ? avgRecent < avgPrev * 0.82 : avgRecent > avgPrev * 0.82;
     const flipUp = avgPrev < 0 && avgRecent > 0;
     const flipDown = avgPrev > 0 && avgRecent < 0;
-    const label = (positive ? "verde" : "vermelho") + " " + (weakening ? "fraco" : "forte") + " (" + hist.length + ")";
+    const label = (positive ? "verde" : "vermelho") + " " + (weakening ? "fraco" : "forte");
 
     return {
       ok: true,
@@ -3619,7 +3625,7 @@ window.BBTipsRobo={
     const range = Math.max(1, max - min);
     const currentPoint = smooth[smooth.length - 1];
     const currentPointRaw = points.slice().sort((a, b) => a.x - b.x).pop() || currentPoint;
-    const current = currentPoint.v;
+    const current = Number.isFinite(Number(currentPointRaw?.v)) ? Number(currentPointRaw.v) : currentPoint.v;
     const zonePct = Math.round(((current - min) / range) * 100);
     const zone =
       zonePct <= 25 ? "Fundo" :
@@ -3782,7 +3788,7 @@ window.BBTipsRobo={
     }
 
     return {
-      status: points.length + " pts foco | hist " + (hist?.length || 0) + " | ponta direita",
+      status: points.length + " pts foco | atual " + formatGraphValue(current) + " | faixa " + formatGraphValue(min) + "-" + formatGraphValue(max) + " | hist " + (hist?.length || 0) + " barras | ponta direita",
       sinal,
       color,
       forca: force + "%",
@@ -3804,6 +3810,9 @@ window.BBTipsRobo={
       currentPoint: currentPointRaw,
       graphState: {
         zonePct,
+        current,
+        min,
+        max,
         force,
         histRead: histA.ok,
         histPositive: histA.ok ? histA.positive : false,
@@ -3811,6 +3820,12 @@ window.BBTipsRobo={
         slope: score
       }
     };
+  }
+
+  function formatGraphValue(value) {
+    const number = Number(value);
+    if (!Number.isFinite(number)) return "--";
+    return Math.abs(number - Math.round(number)) < 0.01 ? String(Math.round(number)) : number.toFixed(1);
   }
 
   function ema(points, period) {
