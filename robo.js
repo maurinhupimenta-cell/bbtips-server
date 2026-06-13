@@ -2489,6 +2489,7 @@ window.BBTipsRobo={
   let lastSlowScan = 0;
   let lastNativeRefresh = 0;
   let lastPublishedGraphKey = "";
+  let loopBusy = false;
 
   function ready(fn) {
     if (document.body) fn();
@@ -2499,8 +2500,6 @@ window.BBTipsRobo={
     makePanel();
     makeCanvas();
     window.__BBTIPS_GRAPH_SYNC_MARKET=()=>{
-      lastNativeRefresh=0;
-      syncNativeGraphMarket();
       setTimeout(loop,350);
     };
     try{clearInterval(window.__BBTIPS_GRAPH_ROBO_TIMER)}catch(e){}
@@ -2677,7 +2676,9 @@ window.BBTipsRobo={
   }
 
   function loop() {
-    if (!panel || !canvas) return;
+    if (!panel || !canvas || loopBusy) return;
+    loopBusy = true;
+    try {
     try{window.BBTipsRobo?.syncLayout?.()}catch(e){}
 
     const nativeCandidate = readNativeGraphData();
@@ -2729,13 +2730,13 @@ window.BBTipsRobo={
     }
 
     const now = Date.now();
-    if (!cachedHistChart || (!cachedHistChart.__bbtipsRegion && !document.contains(cachedHistChart)) || now - lastSlowScan > SLOW_SCAN_MS) {
+    if (!nativeGraph && (!cachedHistChart || (!cachedHistChart.__bbtipsRegion && !document.contains(cachedHistChart)) || now - lastSlowScan > SLOW_SCAN_MS)) {
       cachedHistChart = findHistogramChart(chart);
       lastSlowScan = now;
     }
     const histChart = nativeGraph?.hist?.length ? null : cachedHistChart;
     const hist = nativeGraph?.hist?.length ? nativeGraph.hist : histChart ? readHistogram(histChart) : [];
-    const goalsData = readMatchGoals();
+    const goalsData = nativeGraph ? readInternalMatchGoals() : readMatchGoals();
     const market = analyzeBTTSandOver(goalsData);
     const focusedPoints = focusRightEdge(points);
     const a = analyze(focusedPoints, hist, market, points);
@@ -2766,6 +2767,21 @@ window.BBTipsRobo={
     write(a);
     if (nativeGraph) clearDraw();
     else draw(chart, focusedPoints, a, histChart);
+    } catch (error) {
+      console.error("[BBTips grafico]", error);
+      setGraphPanelActive(true);
+      write({
+        status: "erro no leitor: " + String(error?.message || error || "desconhecido"),
+        sinal: "ERRO DE LEITURA",
+        color: "#ff4d5f",
+        forca: "--", zona: "--", direcao: "--", virada: "--", pagamento: "--", pgtoScore: "--", hist: "--",
+        btts: "--", over: "--", over35: "--", gols: "--", seq: "--", recomendacao: "AGUARDAR", acao: "Aguardar",
+        nota: "O leitor foi interrompido sem bloquear a pagina."
+      });
+      clearDraw();
+    } finally {
+      loopBusy = false;
+    }
   }
 
   function desiredNativeMarket() {
@@ -3350,6 +3366,14 @@ window.BBTipsRobo={
   }
 
   function readMatchGoals() {
+    const internalGoals = readInternalMatchGoals();
+    if (internalGoals.length >= 8) return internalGoals;
+
+    const domGoals = readDomMatchGoals();
+    return domGoals.length ? domGoals : internalGoals;
+  }
+
+  function readInternalMatchGoals() {
     const internalGoals = internalResultsFromLoadedJson()
       .slice(0, 20)
       .reverse()
@@ -3366,12 +3390,7 @@ window.BBTipsRobo={
     if (internalGoals.length >= 8) return internalGoals;
 
     const storedGoals = readStoredMatchGoals();
-    if (storedGoals.length >= 8) return storedGoals;
-
-    const domGoals = readDomMatchGoals();
-    if (domGoals.length >= 8) return domGoals;
-
-    return domGoals.length ? domGoals : storedGoals;
+    return storedGoals.length ? storedGoals : internalGoals;
   }
 
   function readDomMatchGoals() {
