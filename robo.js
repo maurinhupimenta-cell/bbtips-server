@@ -1798,6 +1798,12 @@ function anchorOddExact(v){
   const n=Number(v);
   return Number.isFinite(n)?n.toFixed(2):null;
 }
+function anchorAlertKey(a){
+  const hm=parseTime(a?.anchor?.time);
+  const time=hm===null?"":String(Math.floor(hm/60)).padStart(2,"0")+":"+String(hm%60).padStart(2,"0");
+  const name=normAnchorText(a?.anchor?.name||a?.stat?.label||"ancora").replace(/\?/g,"");
+  return time?`hora:${time}`:`nome:${name}`;
+}
 function rowAnchorKeys(row,m){
   const keys=[];
   anchorTeamNames(row?.name).forEach(t=>keys.push({key:`time:${t}`,label:`time ${t}`}));
@@ -1924,7 +1930,7 @@ function notifyAnchors(games){
     if(now-Number(state.seen[key]||0)>8*60*60*1000)delete state.seen[key];
   });
   const fresh=alerts.filter(a=>{
-    const key=[a.anchor?.time,normAnchorText(a.anchor?.name||a.stat.label),a.target?.time,normAnchorText(a.target?.name)].join("|");
+    const key=anchorAlertKey(a);
     a.alertKey=key;
     return !state.seen[key];
   });
@@ -1935,7 +1941,7 @@ function notifyAnchors(games){
   beep();
   if("Notification" in window&&Notification.permission==="granted")batch.forEach(a=>{
     const msg=`ancora ${a.anchor?.time||"-"} ${a.anchor?.name||a.stat.label} -> +${a.offset} | O3.5 ${a.stat.g}/${a.stat.j} ${a.stat.p.toFixed(0)}% | alvo ${a.target?.time||"-"} ${a.target?.name||"-"}`;
-    new Notification(`${alertBrand()} ancora O3.5`,{body:msg,tag:"bbtips-anchor-"+a.alertKey,renotify:false,silent:true});
+    new Notification(`${alertBrand()} ancora O3.5`,{body:msg,tag:"bbtips-anchor-"+a.alertKey,renotify:false});
   });
   else if("Notification" in window&&Notification.permission!=="denied")Notification.requestPermission();
 }
@@ -1960,9 +1966,12 @@ function liveGraphCombo(m){
   if(g.marketKey&&m?.key&&g.marketKey!==m.key)return null;
   const zone=Number(g.zonePct),force=Number(g.force),slope=Number(g.slope);
   if(!Number.isFinite(zone)||!Number.isFinite(force)||!Number.isFinite(slope))return null;
-  const histGood=Boolean(g.histPositive)&&!Boolean(g.histWeakening)&&zone<=68&&slope>=-0.08;
-  const histBad=zone>=75||Boolean(g.histWeakening)||slope<=-0.22;
-  return {...g,zone,force,slope,histGood,histBad};
+  const histRead=Boolean(g.histRead);
+  const histGood=histRead&&Boolean(g.histPositive)&&!Boolean(g.histWeakening);
+  const histBad=histRead&&(!Boolean(g.histPositive)||Boolean(g.histWeakening));
+  const trendGood=zone<=68&&slope>=-0.08;
+  const trendBad=zone>=75||slope<=-0.22;
+  return {...g,zone,force,slope,histRead,histGood,histBad,trendGood,trendBad};
 }
 function comboScoreForGame({market:m,minHits,prob,probEdge,ev,baseForte,coldOdd,cycle,graph}){
   const profile=comboProfile(m);
@@ -1972,20 +1981,22 @@ function comboScoreForGame({market:m,minHits,prob,probEdge,ev,baseForte,coldOdd,
   const cycleBuilding=cycle?.cur==="RED"&&Number(cycle.pressao)>=35;
   const probStrong=Number.isFinite(prob)&&prob>=profile.minProb&&Number.isFinite(probEdge)&&probEdge>=profile.minEdge;
   const evStrong=Number.isFinite(ev)&&ev>=profile.minEv;
-  let score=0;
-  if(graph?.histGood)score+=25;
-  if(minimumGood)score+=25;
-  if(cycleStrong)score+=15;else if(cycleBuilding)score+=8;
-  if(probStrong)score+=15;
-  if(evStrong)score+=10;
-  if(baseForte)score+=10;
-  if(longMinimum)score+=5;
-  if(graph?.histBad)score-=25;
+  const points={
+    hist:graph?.histGood?15:graph?.histBad?-15:0,
+    trend:graph?.trendGood?10:graph?.trendBad?-10:0,
+    minimum:minimumGood?25:0,
+    cycle:cycleStrong?15:cycleBuilding?8:0,
+    prob:probStrong?15:0,
+    ev:evStrong?10:0,
+    base:baseForte?10:0,
+    longMinimum:longMinimum?5:0
+  };
+  let score=Object.values(points).reduce((sum,value)=>sum+value,0);
   score=Math.max(0,Math.min(100,score));
-  if(!minimumGood||!graph?.histGood)score=Math.min(score,64);
+  if(!minimumGood||!graph?.histGood||!graph?.trendGood)score=Math.min(score,64);
   if(coldOdd||!probStrong||!evStrong)score=Math.min(score,54);
-  const ready=score>=profile.threshold&&minimumGood&&graph?.histGood&&probStrong&&evStrong&&baseForte&&!coldOdd;
-  return {score:Math.round(score),ready,profile,minimumGood,longMinimum,cycleStrong,cycleBuilding,probStrong,evStrong,graph};
+  const ready=score>=profile.threshold&&minimumGood&&graph?.histGood&&graph?.trendGood&&probStrong&&evStrong&&baseForte&&!coldOdd;
+  return {score:Math.round(score),ready,profile,minimumGood,longMinimum,cycleStrong,cycleBuilding,probStrong,evStrong,baseForte,points,graph};
 }
 function analysisForGame(g,series){
   const resultReads=calcResultWindows(g.market).map(r=>({
@@ -2029,6 +2040,7 @@ function analysisForGame(g,series){
   if(!combo.evStrong)motivo=evFail||"EV BAIXO";
   if(!combo.probStrong)motivo=probFail||edgeFail||"PROB/EDGE BAIXO";
   if(!combo.minimumGood)motivo="SEM MINIMA";
+  if(graph?.trendBad)motivo="GRAFICO CONTRA";
   if(graph?.histBad)motivo="HISTOGRAMA CONTRA";
   if(!graph)motivo="SEM GRAFICO";
   if(prob===null)motivo="SEM BASE";
@@ -2138,8 +2150,11 @@ function gamesTable(games,series){
     const odd=`${fmtBaseStat(an.odd)}${an.coldOdd?" ODD FRIA":""}`;
     const ciclo=cycleText(an.cycle||marketCycleStats(g.market));
     const combo=an.combo;
-    const histTxt=!combo?.graph?"SEM DADO":combo.graph.histGood?"OK":combo.graph.histBad?"CONTRA":"SEM CONF.";
-    const comboTxt=combo?`Combo ${combo.score}/${combo.profile.threshold} | Hist ${histTxt} | Minima ${combo.minimumGood?"OK":"NAO"} | Ciclo ${combo.cycleStrong?"FORTE":combo.cycleBuilding?"FORMANDO":"NAO"}`:`Combo --`;
+    const histTxt=!combo?.graph||!combo.graph.histRead?"SEM DADO":combo.graph.histGood?"OK":combo.graph.histBad?"CONTRA":"SEM CONF.";
+    const graphTxt=!combo?.graph?"sem leitura":`zona ${combo.graph.zone}% | forca ${combo.graph.force}% | incl ${combo.graph.slope.toFixed(2)} | linha ${combo.graph.pointCount||0} pts | MACD ${combo.graph.histCount||0} barras | fonte ${combo.graph.source==="caramelo-data"?"DADOS":"VISUAL"}`;
+    const pointLabels={hist:"hist",trend:"tend",minimum:"min",cycle:"ciclo",prob:"prob",ev:"EV",base:"base",longMinimum:"min960"};
+    const scoreParts=combo?.points?Object.entries(combo.points).map(([key,value])=>`${pointLabels[key]||key} ${value>0?"+":""}${value}`).join(" | "):"";
+    const comboTxt=combo?`Combo ${combo.score}/${combo.profile.threshold} | Hist ${histTxt} | Minima ${combo.minimumGood?"OK":"NAO"} | Ciclo ${combo.cycleStrong?"FORTE":combo.cycleBuilding?"FORMANDO":"NAO"}<br>Grafico: ${graphTxt}<br>Pontos: ${scoreParts}`:`Combo --`;
     const oddFixa=exactOddText(exactOddStats(g,g.market));
     const horario=hourStatsText(hourStatsForGame(g,g.market));
     const liga=ligaStatsText(g.market);
@@ -2587,7 +2602,7 @@ window.BBTipsRobo={analyze,config:CONFIG,exportar:exportHistory,historico:loadSt
         color: "#ffd54a"
       };
     }
-    const graphCombo={...a.graphState,marketKey:nativeGraph?.marketKey||window.BBTipsRobo?.config?.market||"",histLabel:a.hist,sinal:a.sinal,recomendacao:a.recomendacao,source:nativeGraph?"caramelo-data":"visual",ts:Date.now()};
+    const graphCombo={...a.graphState,marketKey:nativeGraph?.marketKey||window.BBTipsRobo?.config?.market||"",histLabel:a.hist,sinal:a.sinal,recomendacao:a.recomendacao,source:nativeGraph?"caramelo-data":"visual",pointCount:points.length,histCount:hist.length,ts:Date.now()};
     window.__BBTIPS_GRAPH_COMBO=graphCombo;
     const publishedKey=[graphCombo.marketKey,graphCombo.zonePct,graphCombo.force,graphCombo.histPositive?1:0,graphCombo.histWeakening?1:0,Math.round(Number(graphCombo.slope||0)*100),graphCombo.histLabel].join("|");
     if(publishedKey!==lastPublishedGraphKey){
@@ -3642,6 +3657,7 @@ window.BBTipsRobo={analyze,config:CONFIG,exportar:exportHistory,historico:loadSt
       graphState: {
         zonePct,
         force,
+        histRead: histA.ok,
         histPositive: histA.ok ? histA.positive : false,
         histWeakening: histA.ok ? histA.weakening : false,
         slope: score
