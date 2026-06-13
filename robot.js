@@ -4,6 +4,8 @@ const TIMER="BBTIPS_FINAL_ROBO_TIMER";
 const SEEN="BBTIPS_FINAL_ROBO_SEEN";
 const API_STORE="BBTIPS_FINAL_API_ROWS_V2";
 const HIST_STORE="BBTIPS_FINAL_RESULTADOS_HIST_V1";
+const ANCHOR_ALERT_STATE=SEEN+"_ANCHOR_STATE_V2";
+const ANCHOR_ALERT_LOCK=SEEN+"_ANCHOR_LOCK_V2";
 const AGENTE_LOCAL_URL="http://127.0.0.1:8765/ingest";
 let AGENTE_LOCAL_TS=0;
 let LAST_HIST_SAVE_TS=0;
@@ -1909,18 +1911,33 @@ function notifyAnchors(games){
   if(!CONFIG.alerts)return;
   const alerts=anchorAttention(games).filter(a=>a.stat.j>=3&&a.stat.g>=3&&a.stat.p>=70);
   if(!alerts.length)return;
-  let old=[];try{old=JSON.parse(localStorage.getItem(SEEN+"_ANCHOR")||"[]")}catch(e){}
-  const seen=new Set(old);
-  alerts.slice(0,3).forEach(a=>{
-    const k=[a.target?.time,a.target?.name,a.stat.key,a.offset,Math.round(a.stat.p)].join("|");
-    if(seen.has(k))return;
-    seen.add(k);
-    beep();
-    const msg=`ancora ${a.anchor?.time||"-"} ${a.anchor?.name||a.stat.label} | ${a.stat.label} -> +${a.offset} casa | Over 3.5 ${a.stat.g}/${a.stat.j} ${a.stat.p.toFixed(0)}% | alvo ${a.target?.time||"-"} ${a.target?.name||"-"}`;
-    if("Notification" in window&&Notification.permission==="granted")new Notification(`${alertBrand()} ancora O3.5`,{body:msg});
-    else if("Notification" in window&&Notification.permission!=="denied")Notification.requestPermission();
+  const now=Date.now();
+  const lock=Number(localStorage.getItem(ANCHOR_ALERT_LOCK)||0);
+  if(now-lock<3000)return;
+  localStorage.setItem(ANCHOR_ALERT_LOCK,String(now));
+  let state={seen:{}};
+  try{
+    const saved=JSON.parse(localStorage.getItem(ANCHOR_ALERT_STATE)||"{}");
+    if(saved&&typeof saved==="object")state={seen:saved.seen&&typeof saved.seen==="object"?saved.seen:{}};
+  }catch(e){}
+  Object.keys(state.seen).forEach(key=>{
+    if(now-Number(state.seen[key]||0)>8*60*60*1000)delete state.seen[key];
   });
-  safeSetJson(SEEN+"_ANCHOR",[...seen],80);
+  const fresh=alerts.filter(a=>{
+    const key=[a.anchor?.time,normAnchorText(a.anchor?.name||a.stat.label),a.target?.time,normAnchorText(a.target?.name)].join("|");
+    a.alertKey=key;
+    return !state.seen[key];
+  });
+  if(!fresh.length){safeSetJson(ANCHOR_ALERT_STATE,state);return;}
+  const batch=fresh.slice(0,3);
+  batch.forEach(a=>{state.seen[a.alertKey]=now});
+  safeSetJson(ANCHOR_ALERT_STATE,state);
+  beep();
+  if("Notification" in window&&Notification.permission==="granted")batch.forEach(a=>{
+    const msg=`ancora ${a.anchor?.time||"-"} ${a.anchor?.name||a.stat.label} -> +${a.offset} | O3.5 ${a.stat.g}/${a.stat.j} ${a.stat.p.toFixed(0)}% | alvo ${a.target?.time||"-"} ${a.target?.name||"-"}`;
+    new Notification(`${alertBrand()} ancora O3.5`,{body:msg,tag:"bbtips-anchor-"+a.alertKey,renotify:false,silent:true});
+  });
+  else if("Notification" in window&&Notification.permission!=="denied")Notification.requestPermission();
 }
 function weightedProb(graphP,team,odd){
   const parts=[];
@@ -2266,7 +2283,11 @@ function draw(){
     <h3>Conferencia dos ultimos resultados</h3>${resultsCheckTable()}
     <h3>Linha calculada pelos resultados fechados</h3>${trendBox(a.series)}
   </div>`;
-  document.getElementById("rb-market").onchange=e=>{CONFIG.market=e.target.value;scheduleDraw()};
+  document.getElementById("rb-market").onchange=e=>{
+    CONFIG.market=e.target.value;
+    try{window.__BBTIPS_GRAPH_SYNC_MARKET?.()}catch(x){}
+    scheduleDraw();
+  };
   document.getElementById("rb-ev").onchange=e=>{CONFIG.minEV=Number(e.target.value)||0;scheduleDraw()};
   document.getElementById("rb-edge").onchange=e=>{CONFIG.minEdge=Number(e.target.value)||3;scheduleDraw()};
   document.getElementById("rb-cold").onchange=e=>{CONFIG.minOddPct=Number(e.target.value)||45;scheduleDraw()};
@@ -2298,7 +2319,7 @@ if(CONFIG.autoApi){
   setTimeout(()=>carregarApiDireto({silent:true}).catch(()=>{}),5000);
   window.BBTIPS_SCANNER_COLLECT_TIMER=setInterval(()=>carregarApiDireto({silent:true}).catch(()=>{}),180000);
 }
-window.BBTipsRobo={analyze,config:CONFIG,exportar:exportHistory,historico:loadStoredResults};
+window.BBTipsRobo={analyze,config:CONFIG,exportar:exportHistory,historico:loadStoredResults,refresh:()=>scheduleDraw(80)};
 })();
 
 ;(()=>{
@@ -2326,6 +2347,8 @@ window.BBTipsRobo={analyze,config:CONFIG,exportar:exportHistory,historico:loadSt
   let cachedMarket = null;
   let patternMemory = [];
   let lastSlowScan = 0;
+  let lastNativeRefresh = 0;
+  let lastPublishedGraphKey = "";
 
   function ready(fn) {
     if (document.body) fn();
@@ -2335,6 +2358,11 @@ window.BBTipsRobo={analyze,config:CONFIG,exportar:exportHistory,historico:loadSt
   function start() {
     makePanel();
     makeCanvas();
+    window.__BBTIPS_GRAPH_SYNC_MARKET=()=>{
+      lastNativeRefresh=0;
+      syncNativeGraphMarket();
+      setTimeout(loop,350);
+    };
     try{clearInterval(window.__BBTIPS_GRAPH_ROBO_TIMER)}catch(e){}
     window.__BBTIPS_GRAPH_ROBO_TIMER=setInterval(loop, LOOP_MS);
     loop();
@@ -2496,7 +2524,13 @@ window.BBTipsRobo={analyze,config:CONFIG,exportar:exportHistory,historico:loadSt
   function loop() {
     if (!panel || !canvas) return;
 
-    const chart = biggestChart();
+    const nativeGraph = readNativeGraphData();
+    if (nativeGraph?.pending) {
+      setGraphPanelActive(Boolean(nativeGraph.chart));
+      clearDraw();
+      return;
+    }
+    const chart = nativeGraph?.chart || biggestChart();
     if (!chart) {
       setGraphPanelActive(false);
       clearDraw();
@@ -2504,7 +2538,7 @@ window.BBTipsRobo={analyze,config:CONFIG,exportar:exportHistory,historico:loadSt
     }
 
     setGraphPanelActive(true);
-    const points = readPoints(chart);
+    const points = nativeGraph?.points || readPoints(chart);
     if (points.length < 20) {
       write({
         status: "grafico encontrado, lendo pontos...",
@@ -2534,8 +2568,8 @@ window.BBTipsRobo={analyze,config:CONFIG,exportar:exportHistory,historico:loadSt
       cachedHistChart = findHistogramChart(chart);
       lastSlowScan = now;
     }
-    const histChart = cachedHistChart;
-    const hist = histChart ? readHistogram(histChart) : [];
+    const histChart = nativeGraph ? null : cachedHistChart;
+    const hist = nativeGraph?.hist?.length ? nativeGraph.hist : histChart ? readHistogram(histChart) : [];
     const goalsData = readMatchGoals();
     const market = analyzeBTTSandOver(goalsData);
     const focusedPoints = focusRightEdge(points);
@@ -2553,9 +2587,121 @@ window.BBTipsRobo={analyze,config:CONFIG,exportar:exportHistory,historico:loadSt
         color: "#ffd54a"
       };
     }
-    window.__BBTIPS_GRAPH_COMBO={...a.graphState,marketKey:window.BBTipsRobo?.config?.market||"",histLabel:a.hist,sinal:a.sinal,recomendacao:a.recomendacao,ts:Date.now()};
+    const graphCombo={...a.graphState,marketKey:nativeGraph?.marketKey||window.BBTipsRobo?.config?.market||"",histLabel:a.hist,sinal:a.sinal,recomendacao:a.recomendacao,source:nativeGraph?"caramelo-data":"visual",ts:Date.now()};
+    window.__BBTIPS_GRAPH_COMBO=graphCombo;
+    const publishedKey=[graphCombo.marketKey,graphCombo.zonePct,graphCombo.force,graphCombo.histPositive?1:0,graphCombo.histWeakening?1:0,Math.round(Number(graphCombo.slope||0)*100),graphCombo.histLabel].join("|");
+    if(publishedKey!==lastPublishedGraphKey){
+      lastPublishedGraphKey=publishedKey;
+      try{window.BBTipsRobo?.refresh?.()}catch(e){}
+    }
     write(a);
-    draw(chart, focusedPoints, a, histChart);
+    if (nativeGraph) drawFrame(chart, a.color);
+    else draw(chart, focusedPoints, a, histChart);
+  }
+
+  function desiredNativeMarket() {
+    const key = String(window.BBTipsRobo?.config?.market || "");
+    if (key === "over25") return { select: "over25", key };
+    if (key === "over35") return { select: "over35", key };
+    if (key === "ambas_sim") return { select: "ambas sim", key };
+    return null;
+  }
+
+  function syncNativeGraphMarket() {
+    const desired = desiredNativeMarket();
+    const select = document.getElementById("linhaFT");
+    if (!desired || !select) return true;
+    if (String(select.value || "") === desired.select) return true;
+    select.value = desired.select;
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+    try { window.__graficoPrincipalNovoAPI?.solicitarAtualizacaoGrafico?.(); } catch (e) {}
+    return false;
+  }
+
+  function readNativeGraphData() {
+    const desired = desiredNativeMarket();
+    if (!desired) return null;
+    const nativeRuntime = Boolean(document.getElementById("grafico") || window.__graficoPrincipalNovoAPI);
+    const marketReady = syncNativeGraphMarket();
+    const cfg = window.__gpLastCfg;
+    const selectedDataset = Array.isArray(cfg?.datasets)
+      ? cfg.datasets.find((dataset) => Number(dataset?.order) === 0 && dataset?._tipo)
+      : null;
+    const cfgMarket = String(selectedDataset?._tipo || "").toLowerCase();
+    const values = Array.isArray(cfg?.pontosSelecionado)
+      ? cfg.pontosSelecionado.map(Number).filter(Number.isFinite)
+      : [];
+
+    if (!marketReady || cfgMarket !== desired.select || values.length < 20) {
+      const now = Date.now();
+      if (now - lastNativeRefresh > 7000 && window.LOADED_JSON) {
+        lastNativeRefresh = now;
+        try {
+          const api = window.__graficoPrincipalNovoAPI;
+          if (typeof api?.carregarDados === "function") Promise.resolve(api.carregarDados(window.LOADED_JSON)).catch(() => {});
+          else if (typeof window.graficoPrincipalNovoCarregarDados === "function") Promise.resolve(window.graficoPrincipalNovoCarregarDados(window.LOADED_JSON)).catch(() => {});
+        } catch (e) {}
+      }
+      return nativeRuntime ? { pending: true, chart: document.getElementById("grafico") } : null;
+    }
+
+    const points = values.map((value, index) => ({ x: index, y: -value }));
+    const hist = nativeMacdHistogram(values).map((value, index) => ({ x: index, y: 0, v: value }));
+    return {
+      chart: document.getElementById("grafico") || biggestChart(),
+      points,
+      hist,
+      marketKey: desired.key
+    };
+  }
+
+  function nativeEma(values, period) {
+    const p = Math.max(1, parseInt(period, 10) || 1);
+    const out = new Array(values.length).fill(null);
+    if (!values.length) return out;
+    let sum = 0;
+    let count = 0;
+    let seedIndex = -1;
+    for (let i = 0; i < values.length; i += 1) {
+      const value = Number(values[i]);
+      if (!Number.isFinite(value)) continue;
+      sum += value;
+      count += 1;
+      if (count === p) {
+        seedIndex = i;
+        out[i] = sum / p;
+        break;
+      }
+    }
+    if (seedIndex < 0) {
+      sum = 0;
+      count = 0;
+      for (let i = 0; i < values.length; i += 1) {
+        const value = Number(values[i]);
+        if (!Number.isFinite(value)) continue;
+        sum += value;
+        count += 1;
+        out[i] = sum / count;
+      }
+      return out;
+    }
+    const k = 2 / (p + 1);
+    for (let i = seedIndex + 1; i < values.length; i += 1) {
+      const value = Number(values[i]);
+      out[i] = Number.isFinite(value) ? (value - out[i - 1]) * k + out[i - 1] : out[i - 1];
+    }
+    return out;
+  }
+
+  function nativeMacdHistogram(values) {
+    const fast = Math.max(1, parseInt(document.getElementById("macdRapida")?.value, 10) || 12);
+    const slow = Math.max(fast + 1, parseInt(document.getElementById("macdLenta")?.value, 10) || 26);
+    const signalPeriod = Math.max(1, parseInt(document.getElementById("macdSinal")?.value, 10) || 9);
+    const fastEma = nativeEma(values, fast);
+    const slowEma = nativeEma(values, slow);
+    const macd = fastEma.map((value, index) => Number.isFinite(value) && Number.isFinite(slowEma[index]) ? value - slowEma[index] : null);
+    const signal = nativeEma(macd, signalPeriod);
+    return macd.map((value, index) => Number.isFinite(value) && Number.isFinite(signal[index]) ? value - signal[index] : null).filter(Number.isFinite);
   }
 
   function applyBacktestCaution(a) {
