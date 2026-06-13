@@ -20,6 +20,8 @@ const CONFIG={market:"over25",tol:0.8,minEV:5,minEdge:3,minProb:0,minOddPct:45,m
 const LIGA_LABELS={1:"Copa",2:"Euro",3:"Super",4:"Premier",5:"Split",6:"Express"};
 const SCHEDULE_TIME_ZONE="Europe/London";
 let PANEL_HOVER=false;
+let SCANNER_GRAPH_AUTO_MIN=false;
+let SCANNER_MANUAL_OPEN=false;
 let TOOLTIP_SERIES=[];
 let RESULTS_CACHE=[];
 let API_ROWS=[];
@@ -52,6 +54,9 @@ css.id=PANEL+"-style";
 css.textContent=`
 #${PANEL}{position:fixed;left:6px;right:6px;bottom:6px;z-index:999999;background:#101820;color:#eaf7ff;border:1px solid #29d7ff;border-radius:6px;font:12px Arial;box-shadow:0 8px 24px #0009}
 #${PANEL}.min .body{display:none}
+#${PANEL}.min{right:auto;width:min(760px,calc(100vw - 24px));max-width:calc(100vw - 24px)}
+#${PANEL}.min .top{flex-wrap:nowrap;min-width:0}
+#${PANEL}.min .top>b{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 #${PANEL} .top{display:flex;gap:8px;align-items:center;justify-content:space-between;background:#162331;padding:7px;flex-wrap:wrap}
 #${PANEL} .body{max-height:58vh;overflow:auto;padding:8px}
 #${PANEL} button,#${PANEL} input,#${PANEL} select{background:#0b7189;color:white;border:1px solid #46e3ff;border-radius:4px;padding:5px 8px;margin:2px}
@@ -1010,6 +1015,19 @@ function addSeries(out,path,data){
   const vals=numericArray(data);
   if(vals)out.push({path,vals:vals.slice(-1200)});
 }
+function signedNumericArray(v){
+  if(!Array.isArray(v)||v.length<12)return null;
+  const vals=v.map(x=>{
+    if(typeof x==="number")return x;
+    if(x&&typeof x==="object")return Number(x.y??x.value??x.valor??x.pct??x.percentual??x[1]);
+    return Number(x);
+  }).filter(n=>Number.isFinite(n)&&n>=-100&&n<=100);
+  return vals.length>=12?vals:null;
+}
+function addSignedSeries(out,path,data){
+  const vals=signedNumericArray(data);
+  if(vals)out.push({path,vals:vals.slice(-1200)});
+}
 function scanObj(obj,path,depth,out,seen){
   if(!obj||depth>4||seen.has(obj))return;
   if(typeof obj==="object")seen.add(obj);
@@ -1056,6 +1074,34 @@ function scanChartLibraries(out){
   try{
     document.querySelectorAll(".js-plotly-plot").forEach((el,i)=>(el.data||[]).forEach((s,j)=>addSeries(out,`Plotly.${i}.${s.name||j}`,s.y||s.data)));
   }catch(e){}
+}
+function scanChartIndicatorLibraries(out){
+  try{
+    if(window.Chart)document.querySelectorAll("canvas").forEach((cv,i)=>{
+      let ch=null;
+      try{ch=window.Chart.getChart?window.Chart.getChart(cv):null}catch(e){}
+      if(!ch&&cv.chart)ch=cv.chart;
+      (ch?.data?.datasets||[]).forEach((d,j)=>addSignedSeries(out,`Chart.${i}.${d.label||j}`,d.data));
+    });
+  }catch(e){}
+  try{
+    if(window.echarts)document.querySelectorAll("div,canvas").forEach((el,i)=>{
+      let inst=null;
+      try{inst=window.echarts.getInstanceByDom(el)}catch(e){}
+      (inst?.getOption?.().series||[]).forEach((s,j)=>addSignedSeries(out,`ECharts.${i}.${s.name||j}`,s.data));
+    });
+  }catch(e){}
+  try{
+    const inst=window.Apex?._chartInstances;
+    if(inst)Object.values(inst).forEach((it,i)=>{
+      const series=it?.chart?.w?.config?.series||it?.w?.config?.series||it?.series||[];
+      series.forEach((s,j)=>addSignedSeries(out,`Apex.${i}.${s.name||j}`,s.data||s));
+    });
+  }catch(e){}
+  try{
+    if(window.Highcharts?.charts)window.Highcharts.charts.filter(Boolean).forEach((ch,i)=>(ch.series||[]).forEach((s,j)=>addSignedSeries(out,`Highcharts.${i}.${s.name||j}`,s.yData||s.data)));
+  }catch(e){}
+  try{document.querySelectorAll(".js-plotly-plot").forEach((el,i)=>(el.data||[]).forEach((s,j)=>addSignedSeries(out,`Plotly.${i}.${s.name||j}`,s.y||s.data)))}catch(e){}
 }
 function canvasLineSeries(){
   const out=[];
@@ -1108,6 +1154,35 @@ function trendSeries(){
     const score=(/trend|tend|graf|chart|serie|linha/i.test(s.path)?45:0)+(/sinal|macd|histograma|rsi/i.test(s.path)?20:0)+(s.vals.length>=120?20:0)+(max-min>12?20:0);
     return {...s,cur,min,max,score};
   }).filter(s=>s.max-s.min>=8).sort((a,b)=>b.score-a.score||b.vals.length-a.vals.length).slice(0,8);
+}
+function robotDirectGraphSeries(){
+  const out=[];
+  scanChartLibraries(out);
+  const indicators=[];
+  scanChartIndicatorLibraries(indicators);
+  const marketPatterns={
+    over25:/over\s*2[.,]?5|over2\s*5|\bo25\b/i,
+    over35:/over\s*3[.,]?5|over3\s*5|\bo35\b/i,
+    ambas_sim:/ambas.*sim|ambas.*marcam|\bambs\b|btts/i
+  };
+  const wanted=marketPatterns[CONFIG.market];
+  const candidates=out
+    .filter(s=>Array.isArray(s.vals)&&s.vals.length>=20)
+    .filter(s=>!/(?:macd|histograma|histogram|rsi|sinal|signal|media|m[eé]dia|topo|fundo)/i.test(s.path))
+    .map(s=>{
+      const vals=s.vals.map(Number).filter(Number.isFinite);
+      const range=vals.length?Math.max(...vals)-Math.min(...vals):0;
+      const marketMatch=wanted?.test(s.path)?1:0;
+      const library=/^(?:Chart|ECharts|Apex|Highcharts|Plotly)\./.test(s.path)?1:0;
+      return {...s,vals,range,marketMatch,score:marketMatch*200+library*60+Math.min(40,vals.length/4)+Math.min(30,range)};
+    })
+    .filter(s=>s.range>=5)
+    .sort((a,b)=>b.score-a.score||b.vals.length-a.vals.length);
+  const best=candidates.find(s=>s.marketMatch)||null;
+  const histogram=indicators
+    .filter(s=>/(?:histograma|histogram)/i.test(s.path)&&Array.isArray(s.vals)&&s.vals.length>=12)
+    .sort((a,b)=>b.vals.length-a.vals.length)[0]||null;
+  return best?{values:best.vals.slice(-420),path:best.path,histValues:histogram?.vals?.slice(-420)||[],histPath:histogram?.path||""}:null;
 }
 function tooltipMarketRegex(){
   const n=market().name
@@ -1966,12 +2041,13 @@ function liveGraphCombo(m){
   if(g.marketKey&&m?.key&&g.marketKey!==m.key)return null;
   const zone=Number(g.zonePct),force=Number(g.force),slope=Number(g.slope);
   if(!Number.isFinite(zone)||!Number.isFinite(force)||!Number.isFinite(slope))return null;
-  const histRead=Boolean(g.histRead);
+  const trusted=g.source==="caramelo-data"||g.source==="site-data";
+  const histRead=trusted&&Boolean(g.histRead);
   const histGood=histRead&&Boolean(g.histPositive)&&!Boolean(g.histWeakening);
   const histBad=histRead&&(!Boolean(g.histPositive)||Boolean(g.histWeakening));
-  const trendGood=zone<=68&&slope>=-0.08;
-  const trendBad=zone>=75||slope<=-0.22;
-  return {...g,zone,force,slope,histRead,histGood,histBad,trendGood,trendBad};
+  const trendGood=trusted&&zone<=68&&slope>=-0.08;
+  const trendBad=trusted&&(zone>=75||slope<=-0.22);
+  return {...g,zone,force,slope,trusted,histRead,histGood,histBad,trendGood,trendBad};
 }
 function comboScoreForGame({market:m,minHits,prob,probEdge,ev,baseForte,coldOdd,cycle,graph}){
   const profile=comboProfile(m);
@@ -2042,6 +2118,7 @@ function analysisForGame(g,series){
   if(!combo.minimumGood)motivo="SEM MINIMA";
   if(graph?.trendBad)motivo="GRAFICO CONTRA";
   if(graph?.histBad)motivo="HISTOGRAMA CONTRA";
+  if(graph&&!graph.trusted)motivo="GRAFICO VISUAL NAO VALIDADO";
   if(!graph)motivo="SEM GRAFICO";
   if(prob===null)motivo="SEM BASE";
   if(coldOdd)motivo="ODD FRIA";
@@ -2151,7 +2228,8 @@ function gamesTable(games,series){
     const ciclo=cycleText(an.cycle||marketCycleStats(g.market));
     const combo=an.combo;
     const histTxt=!combo?.graph||!combo.graph.histRead?"SEM DADO":combo.graph.histGood?"OK":combo.graph.histBad?"CONTRA":"SEM CONF.";
-    const graphTxt=!combo?.graph?"sem leitura":`zona ${combo.graph.zone}% | forca ${combo.graph.force}% | incl ${combo.graph.slope.toFixed(2)} | linha ${combo.graph.pointCount||0} pts | MACD ${combo.graph.histCount||0} barras | fonte ${combo.graph.source==="caramelo-data"?"DADOS":"VISUAL"}`;
+    const sourceLabel=combo?.graph?.source==="caramelo-data"?"DADOS CARAMELO":combo?.graph?.source==="site-data"?"DADOS DO GRAFICO":"VISUAL APROX - NAO SOMA";
+    const graphTxt=!combo?.graph?"sem leitura":`zona ${combo.graph.zone}% | forca ${combo.graph.force}% | incl ${combo.graph.slope.toFixed(2)} | linha ${combo.graph.pointCount||0} pts | MACD ${combo.graph.histCount||0} barras | fonte ${sourceLabel}`;
     const pointLabels={hist:"hist",trend:"tend",minimum:"min",cycle:"ciclo",prob:"prob",ev:"EV",base:"base",longMinimum:"min960"};
     const scoreParts=combo?.points?Object.entries(combo.points).map(([key,value])=>`${pointLabels[key]||key} ${value>0?"+":""}${value}`).join(" | "):"";
     const comboTxt=combo?`Combo ${combo.score}/${combo.profile.threshold} | Hist ${histTxt} | Minima ${combo.minimumGood?"OK":"NAO"} | Ciclo ${combo.cycleStrong?"FORTE":combo.cycleBuilding?"FORMANDO":"NAO"}<br>Grafico: ${graphTxt}<br>Pontos: ${scoreParts}`:`Combo --`;
@@ -2222,6 +2300,33 @@ function scheduleDraw(delay=180){
   clearTimeout(DRAW_TIMER);
   DRAW_TIMER=setTimeout(()=>draw(),delay);
 }
+function graphPanelIsOpen(){
+  const visible=el=>{
+    if(!el||el.closest?.(`#${PANEL},#bbtips-robo-root`))return false;
+    const style=getComputedStyle(el),rect=el.getBoundingClientRect();
+    return !el.classList.contains("hidden")&&style.display!=="none"&&style.visibility!=="hidden"&&rect.width>350&&rect.height>160&&rect.bottom>0&&rect.top<innerHeight;
+  };
+  const known=[
+    document.getElementById("graficoPrincipalNovoPanel"),
+    document.getElementById("graficoTradingPanel"),
+    document.getElementById("grafico")
+  ];
+  if(known.some(visible))return true;
+  return Array.from(document.querySelectorAll("canvas,svg")).some(visible);
+}
+function syncScannerWithGraph(){
+  const graphOpen=graphPanelIsOpen();
+  const wasMin=P.classList.contains("min");
+  if(graphOpen&&!SCANNER_MANUAL_OPEN){
+    P.classList.add("min");
+    SCANNER_GRAPH_AUTO_MIN=true;
+  }else if(!graphOpen&&SCANNER_GRAPH_AUTO_MIN){
+    P.classList.remove("min");
+    SCANNER_GRAPH_AUTO_MIN=false;
+    SCANNER_MANUAL_OPEN=false;
+  }
+  return {graphOpen,changed:wasMin!==P.classList.contains("min")};
+}
 function manualCollectAndDraw(){
   scheduleDraw(20);
   setTimeout(()=>sendAgenteLocal(rowsForTelemetry(),{force:true}),120);
@@ -2264,6 +2369,7 @@ function draw(){
   const bodyOld=P.querySelector(".body");
   const oldScroll=bodyOld?bodyOld.scrollTop:0;
   const oldPageX=window.scrollX,oldPageY=window.scrollY;
+  const graphOpen=syncScannerWithGraph().graphOpen;
   const isMin=P.classList.contains("min");
   loadApiRowsLight();
   refreshResultsCacheLight(isMin?false:false);
@@ -2273,7 +2379,12 @@ function draw(){
     P.innerHTML=`<div class="top"><b>BBTips Robo | ${new Date().toLocaleTimeString()} | Liga ${ligaAtual||"auto"} | Mercado ${esc(market().name)} | API ${API_ROWS.length} | Resultados ${RESULTS_CACHE.length} | Auto ${CONFIG.autoRefresh?"ON":"OFF"} | modo leve</b>
     <span><button id="rb-scan">Atualizar</button><button id="rb-min">Abrir</button><button id="rb-close">Fechar</button></span></div>`;
     document.getElementById("rb-scan").onclick=manualCollectAndDraw;
-    document.getElementById("rb-min").onclick=()=>{P.classList.remove("min");scheduleDraw(20)};
+    document.getElementById("rb-min").onclick=()=>{
+      SCANNER_MANUAL_OPEN=true;
+      SCANNER_GRAPH_AUTO_MIN=false;
+      P.classList.remove("min");
+      scheduleDraw(20);
+    };
     document.getElementById("rb-close").onclick=()=>{clearInterval(window[TIMER]);P.remove()};
     window.scrollTo(oldPageX,oldPageY);
     return;
@@ -2312,7 +2423,12 @@ function draw(){
   document.getElementById("rb-hist").onclick=()=>exportHistory();
   document.getElementById("rb-scan").onclick=manualCollectAndDraw;
   document.getElementById("rb-som").onclick=beep;
-  document.getElementById("rb-min").onclick=()=>P.classList.toggle("min");
+  document.getElementById("rb-min").onclick=()=>{
+    SCANNER_MANUAL_OPEN=false;
+    SCANNER_GRAPH_AUTO_MIN=graphOpen;
+    P.classList.add("min");
+    scheduleDraw(20);
+  };
   document.getElementById("rb-close").onclick=()=>{clearInterval(window[TIMER]);P.remove()};
   const bodyNew=P.querySelector(".body");
   if(bodyNew)bodyNew.scrollTop=oldScroll;
@@ -2334,7 +2450,15 @@ if(CONFIG.autoApi){
   setTimeout(()=>carregarApiDireto({silent:true}).catch(()=>{}),5000);
   window.BBTIPS_SCANNER_COLLECT_TIMER=setInterval(()=>carregarApiDireto({silent:true}).catch(()=>{}),180000);
 }
-window.BBTipsRobo={analyze,config:CONFIG,exportar:exportHistory,historico:loadStoredResults,refresh:()=>scheduleDraw(80)};
+window.BBTipsRobo={
+  analyze,
+  config:CONFIG,
+  exportar:exportHistory,
+  historico:loadStoredResults,
+  readGraphSeries:robotDirectGraphSeries,
+  refresh:()=>scheduleDraw(80),
+  syncLayout:()=>{if(syncScannerWithGraph().changed)scheduleDraw(20)}
+};
 })();
 
 ;(()=>{
@@ -2412,6 +2536,7 @@ window.BBTipsRobo={analyze,config:CONFIG,exportar:exportHistory,historico:loadSt
       '<span>ROBO BBTIPS LIGADO</span>',
       '<button id="bbtips-min" type="button" style="cursor:pointer;background:#111;color:#00ff66;border:1px solid #00ff66;border-radius:6px;font-size:18px;font-weight:900;width:34px;height:28px;line-height:20px">_</button>',
       "</div>",
+      '<div id="bbtips-mini-summary" style="display:none;color:#fff;font-size:12px;line-height:1.45;border-top:1px solid #244;padding-top:7px">ANALISANDO | zona -- | força -- | hist --</div>',
       '<div id="bbtips-body">',
       '<div id="bbtips-status" style="font-size:13px;color:#ccc;margin-bottom:10px">procurando grafico...</div>',
       '<div id="bbtips-sinal" style="font-size:28px;font-weight:900;text-align:center;border:2px solid #ffd54a;color:#ffd54a;border-radius:8px;padding:10px;margin-bottom:10px">ANALISANDO</div>',
@@ -2454,7 +2579,8 @@ window.BBTipsRobo={analyze,config:CONFIG,exportar:exportHistory,historico:loadSt
     const drag = document.getElementById("bbtips-drag");
     const min = document.getElementById("bbtips-min");
     const body = document.getElementById("bbtips-body");
-    const minimized = localStorage.getItem(PANEL_MIN_KEY) === "1";
+    const savedMinimized = localStorage.getItem(PANEL_MIN_KEY);
+    const minimized = savedMinimized === null ? true : savedMinimized === "1";
     setMinimized(minimized);
 
     drag.addEventListener("pointerdown", (event) => {
@@ -2494,10 +2620,12 @@ window.BBTipsRobo={analyze,config:CONFIG,exportar:exportHistory,historico:loadSt
   function setMinimized(minimized) {
     const body = document.getElementById("bbtips-body");
     const min = document.getElementById("bbtips-min");
+    const summary = document.getElementById("bbtips-mini-summary");
     if (!body || !min) return;
     body.style.display = minimized ? "none" : "block";
+    if (summary) summary.style.display = minimized ? "block" : "none";
     min.textContent = minimized ? "+" : "_";
-    panel.style.setProperty("width", minimized ? "260px" : "300px", "important");
+    panel.style.setProperty("width", minimized ? "300px" : "300px", "important");
   }
 
   function setGraphPanelActive(active) {
@@ -2538,8 +2666,9 @@ window.BBTipsRobo={analyze,config:CONFIG,exportar:exportHistory,historico:loadSt
 
   function loop() {
     if (!panel || !canvas) return;
+    try{window.BBTipsRobo?.syncLayout?.()}catch(e){}
 
-    const nativeGraph = readNativeGraphData();
+    const nativeGraph = readNativeGraphData() || readLibraryGraphData();
     if (nativeGraph?.pending) {
       setGraphPanelActive(Boolean(nativeGraph.chart));
       clearDraw();
@@ -2583,7 +2712,7 @@ window.BBTipsRobo={analyze,config:CONFIG,exportar:exportHistory,historico:loadSt
       cachedHistChart = findHistogramChart(chart);
       lastSlowScan = now;
     }
-    const histChart = nativeGraph ? null : cachedHistChart;
+    const histChart = nativeGraph?.hist?.length ? null : cachedHistChart;
     const hist = nativeGraph?.hist?.length ? nativeGraph.hist : histChart ? readHistogram(histChart) : [];
     const goalsData = readMatchGoals();
     const market = analyzeBTTSandOver(goalsData);
@@ -2602,7 +2731,7 @@ window.BBTipsRobo={analyze,config:CONFIG,exportar:exportHistory,historico:loadSt
         color: "#ffd54a"
       };
     }
-    const graphCombo={...a.graphState,marketKey:nativeGraph?.marketKey||window.BBTipsRobo?.config?.market||"",histLabel:a.hist,sinal:a.sinal,recomendacao:a.recomendacao,source:nativeGraph?"caramelo-data":"visual",pointCount:points.length,histCount:hist.length,ts:Date.now()};
+    const graphCombo={...a.graphState,marketKey:nativeGraph?.marketKey||window.BBTipsRobo?.config?.market||"",histLabel:a.hist,sinal:a.sinal,recomendacao:a.recomendacao,source:nativeGraph?.source||"visual",sourcePath:nativeGraph?.sourcePath||"",pointCount:points.length,histCount:hist.length,ts:Date.now()};
     window.__BBTIPS_GRAPH_COMBO=graphCombo;
     const publishedKey=[graphCombo.marketKey,graphCombo.zonePct,graphCombo.force,graphCombo.histPositive?1:0,graphCombo.histWeakening?1:0,Math.round(Number(graphCombo.slope||0)*100),graphCombo.histLabel].join("|");
     if(publishedKey!==lastPublishedGraphKey){
@@ -2666,7 +2795,26 @@ window.BBTipsRobo={analyze,config:CONFIG,exportar:exportHistory,historico:loadSt
       chart: document.getElementById("grafico") || biggestChart(),
       points,
       hist,
-      marketKey: desired.key
+      marketKey: desired.key,
+      source: "caramelo-data",
+      sourcePath: "window.__gpLastCfg.pontosSelecionado"
+    };
+  }
+
+  function readLibraryGraphData() {
+    let direct=null;
+    try { direct=window.BBTipsRobo?.readGraphSeries?.(); } catch (e) {}
+    const values=Array.isArray(direct?.values)?direct.values.map(Number).filter(Number.isFinite):[];
+    if(values.length<20)return null;
+    const histValues=Array.isArray(direct?.histValues)?direct.histValues.map(Number).filter(Number.isFinite):[];
+    return {
+      chart: biggestChart(),
+      points:values.map((value,index)=>({x:index,y:-value})),
+      hist:histValues.map((value,index)=>({x:index,y:0,v:value})),
+      marketKey:String(window.BBTipsRobo?.config?.market||""),
+      source:"site-data",
+      sourcePath:String(direct?.path||"biblioteca do grafico"),
+      histSourcePath:String(direct?.histPath||"")
     };
   }
 
@@ -3708,6 +3856,7 @@ window.BBTipsRobo={analyze,config:CONFIG,exportar:exportHistory,historico:loadSt
     text("bbtips-bt-over35", a.backtest?.over35 || "--");
     text("bbtips-bt-btts", a.backtest?.btts || "--");
     text("bbtips-bt-sinal", a.backtest?.sinal || "AGUARDAR");
+    text("bbtips-mini-summary", `${a.sinal} | ${a.zona} | força ${a.forca} | hist ${a.hist||"--"}`);
     const s = document.getElementById("bbtips-sinal");
     if (s) {
       s.style.color = a.color;
