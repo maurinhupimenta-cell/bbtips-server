@@ -139,4 +139,58 @@ assert.equal(waiting.waiting, true);
 const parsedFt = recalculated.points.map((point) => point.v);
 assert.ok(Math.max(...parsedFt) > Math.min(...parsedFt), "a serie FT nao pode ficar plana pelo HT 0-0");
 
+function independentlyParseFtResults(rows) {
+  const results = [];
+  for (const row of rows) {
+    const cells = Array.isArray(row?.c) ? row.c : [];
+    for (let index = cells.length - 1; index >= 1 && results.length < 420; index -= 1) {
+      const lines = String(cells[index]?.v || "").replace(/\r/g, "").trim().split("\n");
+      const firstLineScore = lines[0]?.match(/(\d+)\+?\s*-\s*(\d+)\+?\s*$/);
+      const separateScore = lines.slice(1).join("\n").match(/(\d+)\+?\s*-\s*(\d+)\+?/);
+      const match = firstLineScore || separateScore;
+      if (match) results.push({ casa: Number(match[1]), fora: Number(match[2]) });
+    }
+  }
+  return results;
+}
+
+function independentlyCalculateSeries(results, market, requested = 120) {
+  const used = results.slice(0, requested);
+  const blockCount = Math.floor(used.length / 20);
+  if (blockCount < 2) return [];
+  const pays = (game) => {
+    const total = game.casa + game.fora;
+    if (market === "over25") return total > 2.5;
+    if (market === "over35") return total > 3.5;
+    return game.casa > 0 && game.fora > 0;
+  };
+  const blocks = Array.from({ length: blockCount }, (_, index) => used.slice(index * 20, index * 20 + 20));
+  const newest = blocks.at(-1);
+  const points = [newest.filter(pays).length / newest.length * 100];
+  for (let block = blockCount - 2; block >= 0; block -= 1) {
+    for (let index = 19; index >= 0; index -= 1) {
+      const currentPays = pays(blocks[block][index]);
+      const referencePays = pays(blocks[block + 1][index]);
+      points.push(points.at(-1) + (currentPays && !referencePays ? 5 : !currentPays && referencePays ? -5 : 0));
+    }
+  }
+  return points;
+}
+
+if (process.env.BBTIPS_LIVE_JSON) {
+  const live = JSON.parse(fs.readFileSync(process.env.BBTIPS_LIVE_JSON, "utf8"));
+  const liveRows = live?.table?.rows || [];
+  const independentResults = independentlyParseFtResults(liveRows);
+  assert.ok(independentResults.length >= 40, "JSON real precisa ter ao menos dois blocos completos");
+  for (const [scannerMarket, market] of [["over25", "over25"], ["over35", "over35"], ["ambas_sim", "ambas sim"]]) {
+    const actual = Array.from(
+      run({ cfg: {}, rows: liveRows, scannerMarket }).points,
+      (point) => Number(point.v)
+    );
+    const expected = independentlyCalculateSeries(independentResults, market);
+    assert.deepEqual(actual, expected, `${market}: serie interna divergiu da conferencia independente`);
+  }
+  console.log(`graph-native-live: ok (${independentResults.length} placares FT)`);
+}
+
 console.log("graph-native: ok");
