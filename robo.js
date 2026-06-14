@@ -2495,6 +2495,8 @@ window.BBTipsRobo={
   let lastNativeRefresh = 0;
   let lastPublishedGraphKey = "";
   let loopBusy = false;
+  let internalResultsCacheSource = null;
+  let internalResultsCache = [];
 
   function ready(fn) {
     if (document.body) fn();
@@ -2571,7 +2573,7 @@ window.BBTipsRobo={
       '<span id="bbtips-recomendacao" style="display:block;margin-top:4px;font-weight:900;font-size:15px;color:#ffd54a">AGUARDAR</span>',
       "</div>",
       '<div style="margin-top:10px;padding:10px;background:rgba(255,213,74,.08);border:1px solid rgba(255,213,74,.35);border-radius:8px;font-size:12px;line-height:1.45">',
-      '<strong style="color:#ffd54a;font-size:13px">BACKTEST VISUAL</strong><br>',
+      '<strong style="color:#ffd54a;font-size:13px">BACKTEST DA SERIE</strong><br>',
       '<span id="bbtips-bt-status">juntando memoria...</span><br>',
       'O2.5: <span id="bbtips-bt-over" style="font-weight:800">--</span> | ',
       'O3.5: <span id="bbtips-bt-over35" style="font-weight:800">--</span><br>',
@@ -2677,6 +2679,7 @@ window.BBTipsRobo={
       "style",
       "position:fixed!important;left:0!important;top:0!important;pointer-events:none!important;z-index:" + (Z - 1) + "!important"
     );
+    if (/(^|\.)caramelotips\.com\.br$/i.test(location.hostname)) canvas.style.display = "none";
     document.documentElement.appendChild(canvas);
   }
 
@@ -2686,6 +2689,7 @@ window.BBTipsRobo={
     try {
     try{window.BBTipsRobo?.syncLayout?.()}catch(e){}
 
+    const nativeOnly = isCarameloGraphPage();
     const nativeCandidate = readNativeGraphData();
     if (nativeCandidate?.waiting) {
       setGraphPanelActive(true);
@@ -2695,12 +2699,25 @@ window.BBTipsRobo={
         color: "#ffd54a",
         forca: "--", zona: "--", direcao: "--", virada: "--", pagamento: "--", pgtoScore: "--", hist: "--",
         btts: "--", over: "--", over35: "--", gols: "--", seq: "--", recomendacao: "AGUARDAR", acao: "Aguardar",
-        nota: "O painel do grafico abriu, mas o site ainda nao publicou os pontos. A leitura por pixels foi pausada para nao travar a pagina."
+        nota: nativeCandidate.detail || "O site ainda nao publicou os pontos internos. A leitura visual esta desligada para nao gerar uma marcacao errada."
       });
       clearDraw();
       return;
     }
     const nativeGraph = nativeCandidate || readLibraryGraphData();
+    if (nativeOnly && !nativeGraph) {
+      setGraphPanelActive(true);
+      write({
+        status: "aguardando dados internos do grafico...",
+        sinal: "AGUARDANDO DADOS",
+        color: "#ffd54a",
+        forca: "--", zona: "--", direcao: "--", virada: "--", pagamento: "--", pgtoScore: "--", hist: "--",
+        btts: "--", over: "--", over35: "--", gols: "--", seq: "--", recomendacao: "AGUARDAR", acao: "Aguardar",
+        nota: "No Caramelo o robo usa somente a serie interna ou a contagem exata dos resultados. A leitura visual esta desligada."
+      });
+      clearDraw();
+      return;
+    }
     const chart = nativeGraph?.chart || biggestChart();
     if (!chart) {
       setGraphPanelActive(false);
@@ -2730,7 +2747,7 @@ window.BBTipsRobo={
         acao: "Aguardar",
         nota: "Achei o grafico. Estou tentando transformar a linha em pontos para analisar tendencia."
       });
-      drawFrame(chart, "#ffd54a");
+      if (!nativeOnly) drawFrame(chart, "#ffd54a");
       return;
     }
 
@@ -2746,7 +2763,7 @@ window.BBTipsRobo={
     const focusedPoints = focusRightEdge(points);
     const a = analyze(focusedPoints, hist, market, points);
     if (nativeGraph) {
-      a.status += " | fonte DADOS DO SITE";
+      a.status += " | fonte " + nativeGraph.sourcePath;
     } else {
       a.status = focusedPoints.length + " pts foco | leitura visual aproximada | hist " + (hist?.length || 0) + " barras";
     }
@@ -2770,7 +2787,7 @@ window.BBTipsRobo={
       lastPublishedGraphKey=publishedKey;
     }
     write(a);
-    if (nativeGraph) clearDraw();
+    if (nativeGraph || nativeOnly) clearDraw();
     else draw(chart, focusedPoints, a, histChart);
     } catch (error) {
       console.error("[BBTips grafico]", error);
@@ -2789,11 +2806,19 @@ window.BBTipsRobo={
     }
   }
 
+  function isCarameloGraphPage() {
+    return /(^|\.)caramelotips\.com\.br$/i.test(location.hostname) && Boolean(
+      document.getElementById("graficoPrincipalNovoPanel") ||
+      document.getElementById("linhaFT") ||
+      document.getElementById("grafico")
+    );
+  }
+
   function desiredNativeMarket() {
     const key = String(window.BBTipsRobo?.config?.market || "");
-    if (key === "over25") return { select: "over25", key };
-    if (key === "over35") return { select: "over35", key };
-    if (key === "ambas_sim") return { select: "ambas sim", key };
+    if (key === "over25") return { value: "over25", key, source: "mercado do scanner" };
+    if (key === "over35") return { value: "over35", key, source: "mercado do scanner" };
+    if (key === "ambas_sim") return { value: "ambas sim", key, source: "mercado do scanner" };
     return null;
   }
 
@@ -2899,7 +2924,9 @@ window.BBTipsRobo={
   }
 
   function internalResultsFromLoadedJson() {
-    const rows = window.LOADED_JSON?.table?.rows;
+    const source = window.LOADED_JSON;
+    if (source && source === internalResultsCacheSource) return internalResultsCache;
+    const rows = source?.table?.rows;
     if (!Array.isArray(rows)) return [];
     const results = [];
     for (let rowIndex = 0; rowIndex < rows.length && results.length < 420; rowIndex += 1) {
@@ -2910,12 +2937,14 @@ window.BBTipsRobo={
         const lines = raw.split("\n").map((line) => line.trim()).filter(Boolean);
         const score = lines.slice(1).join("\n").match(/(\d+)\+?\s*-\s*(\d+)\+?/);
         const stuck = lines[0]?.match(/^(.*?\s+x\s+.*?)(\d+)\+?\s*-\s*(\d+)\+?\s*$/i);
-        const match = score || (stuck ? [stuck[0], stuck[2], stuck[3]] : null);
+        const match = stuck ? [stuck[0], stuck[2], stuck[3]] : score;
         if (!match) continue;
         results.push({ casa: Number(match[1]), fora: Number(match[2]) });
       }
     }
-    return results;
+    internalResultsCacheSource = source;
+    internalResultsCache = results;
+    return internalResultsCache;
   }
 
   function calculateNativeSeries(market) {
@@ -2949,18 +2978,34 @@ window.BBTipsRobo={
     );
     if (!nativeRuntime) return null;
     const cfg = window.__gpLastCfg;
-    const resolvedMarket = resolveNativeMarket(cfg);
+    const cfgValues = Array.isArray(cfg?.pontosSelecionado) ? Array.from(cfg.pontosSelecionado) : [];
+    const siteValues = Array.isArray(window.__ultimoPontosSelecionado) ? Array.from(window.__ultimoPontosSelecionado) : [];
+    const graphMarket = resolveNativeMarket(cfg);
+    const resolvedMarket = graphMarket || desiredNativeMarket();
     const activeMarket = resolvedMarket?.value || "";
     const marketKey = resolvedMarket?.key || "";
-    const cfgValues = Array.isArray(cfg?.pontosSelecionado) ? cfg.pontosSelecionado : [];
-    const siteValues = Array.isArray(window.__ultimoPontosSelecionado) ? window.__ultimoPontosSelecionado : [];
-    const calculatedValues = cfgValues.length >= 20 || siteValues.length >= 20 ? [] : calculateNativeSeries(activeMarket);
-    const rawValues = cfgValues.length >= 20 ? cfgValues : siteValues.length >= 20 ? siteValues : calculatedValues;
+    const canUseInternalPoints = Boolean(graphMarket);
+    const calculatedValues = canUseInternalPoints && (cfgValues.length >= 20 || siteValues.length >= 20) ? [] : calculateNativeSeries(activeMarket);
+    const rawValues = canUseInternalPoints && cfgValues.length >= 20
+      ? cfgValues
+      : canUseInternalPoints && siteValues.length >= 20
+        ? siteValues
+        : calculatedValues;
     const values = rawValues.map(Number).filter(Number.isFinite);
 
-    if (!marketKey) return null;
+    if (!marketKey) {
+      return isCarameloGraphPage()
+        ? { waiting: true, message: "selecione Over 2.5, Over 3.5 ou Ambas Sim no grafico", detail: "O mercado do grafico nao foi identificado; nenhuma leitura visual foi usada." }
+        : null;
+    }
     if (values.length < 20) {
-      return null;
+      return isCarameloGraphPage()
+        ? {
+            waiting: true,
+            message: "aguardando a serie interna do grafico...",
+            detail: "Pontos internos: " + Math.max(cfgValues.length, siteValues.length) + " | resultados validos para recalculo: " + internalResultsFromLoadedJson().length + "."
+          }
+        : null;
     }
 
     const points = values.map((value, index) => ({ x: index, y: -value, v: value }));
@@ -2971,11 +3016,11 @@ window.BBTipsRobo={
       hist,
       marketKey,
       source: "caramelo-data",
-      sourcePath: (resolvedMarket?.source || "mercado detectado") + " | " + (cfgValues.length >= 20
-        ? "window.__gpLastCfg.pontosSelecionado"
-        : siteValues.length >= 20
-          ? "window.__ultimoPontosSelecionado"
-          : "recalculado de window.LOADED_JSON")
+      sourcePath: (canUseInternalPoints && cfgValues.length >= 20
+        ? "DADOS INTERNOS DO GRAFICO (__gpLastCfg), " + values.length + " pontos"
+        : canUseInternalPoints && siteValues.length >= 20
+          ? "DADOS INTERNOS DO GRAFICO (__ultimoPontosSelecionado), " + values.length + " pontos"
+          : "CONTAGEM EXATA DOS RESULTADOS (LOADED_JSON), " + values.length + " pontos")
     };
   }
 
@@ -4094,6 +4139,11 @@ window.BBTipsRobo={
 
   function clearDraw() {
     if (!canvas) return;
+    if (canvas.style.display === "none") {
+      canvas.width = 1;
+      canvas.height = 1;
+      return;
+    }
     prep();
   }
 
