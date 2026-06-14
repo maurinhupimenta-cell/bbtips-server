@@ -53,6 +53,7 @@ const runtimeCode = [
   "let internalResultsCacheSource = null;",
   "let internalResultsCache = [];",
   ...functions.map(extractFunction),
+  "function biggestChart() { return null; }",
   "function nativeMacdHistogram(values) { return values.map(() => 0); }",
   "result = readNativeGraphData();"
 ].join("\n");
@@ -70,13 +71,13 @@ function rowsFromScores(scores) {
   return rows;
 }
 
-function run({ cfg, points = [], rows = null, selectedMarket = "", scannerMarket = "over25" }) {
+function run({ cfg, points = [], rows = null, selectedMarket = "", scannerMarket = "over25", hostname = "www.caramelotips.com.br", includeGraphElement = true }) {
   const elements = {
     graficoPrincipalNovoPanel: { querySelectorAll: () => [] },
-    grafico: { closest: () => null },
     linhaFT: { value: selectedMarket },
     qtd: { value: "120" }
   };
+  if (includeGraphElement) elements.grafico = { closest: () => null };
   const context = {
     window: {
       __gpLastCfg: cfg,
@@ -87,9 +88,10 @@ function run({ cfg, points = [], rows = null, selectedMarket = "", scannerMarket
     document: {
       getElementById: (id) => elements[id] || null,
       querySelector: () => null,
-      querySelectorAll: () => []
+      querySelectorAll: () => [],
+      body: { innerText: "Tendencias Referencia" }
     },
-    location: { hostname: "www.caramelotips.com.br" },
+    location: { hostname },
     localStorage: { getItem: () => null },
     Array,
     Boolean,
@@ -165,6 +167,16 @@ const recalculatedWhites = recalculated.points.filter((point) => point.marker ==
 assert.ok(recalculatedWhites.some((point) => point.delta > 0), "precisa preservar branca de subida");
 assert.ok(recalculatedWhites.some((point) => point.delta < 0), "precisa preservar branca de descida");
 
+const thtipsInternal = run({
+  cfg: null,
+  rows,
+  scannerMarket: "over25",
+  hostname: "thtips.com.br",
+  includeGraphElement: false
+});
+assert.equal(thtipsInternal.points.length, 41, "THTips deve calcular todos os pontos pelo JSON interno");
+assert.match(thtipsInternal.sourcePath, /CONTAGEM EXATA/);
+
 function testActiveLiga(platform, label) {
   const context = {
     CONFIG: { ligaAuto: true },
@@ -217,6 +229,21 @@ const whiteDown = testWhiteEdge([
 ]);
 assert.equal(whiteDown.direction, "descendo");
 assert.equal(whiteDown.move, -5);
+
+const whiteSum = testWhiteEdge([
+  { x: 0, v: 30, delta: 0, marker: "red" },
+  { x: 1, v: 35, delta: 5, marker: "white" },
+  { x: 2, v: 35, delta: 0, marker: "green" },
+  { x: 3, v: 40, delta: 5, marker: "white" },
+  { x: 4, v: 35, delta: -5, marker: "white" },
+  { x: 5, v: 35, delta: 0, marker: "red" }
+]);
+assert.equal(whiteSum.count, 3);
+assert.equal(whiteSum.up, 2);
+assert.equal(whiteSum.down, 1);
+assert.equal(whiteSum.net, 5);
+assert.equal(whiteSum.recentNet, 5);
+assert.equal(whiteSum.direction, "subindo");
 
 function independentlyParseFtResults(rows) {
   const results = [];

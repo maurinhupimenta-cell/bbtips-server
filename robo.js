@@ -2693,7 +2693,7 @@ window.BBTipsRobo={
       "style",
       "position:fixed!important;left:0!important;top:0!important;pointer-events:none!important;z-index:" + (Z - 1) + "!important"
     );
-    if (/(^|\.)caramelotips\.com\.br$/i.test(location.hostname)) canvas.style.display = "none";
+    if (isCarameloGraphPage()) canvas.style.display = "none";
     document.documentElement.appendChild(canvas);
   }
 
@@ -2821,11 +2821,20 @@ window.BBTipsRobo={
   }
 
   function isCarameloGraphPage() {
-    return /(^|\.)caramelotips\.com\.br$/i.test(location.hostname) && Boolean(
+    const hasInternalData = Boolean(
+      Array.isArray(window.__gpLastCfg?.pontosSelecionado) ||
+      Array.isArray(window.__ultimoPontosSelecionado) ||
+      Array.isArray(window.LOADED_JSON?.table?.rows)
+    );
+    const hasGraphUi = Boolean(
       document.getElementById("graficoPrincipalNovoPanel") ||
       document.getElementById("linhaFT") ||
       document.getElementById("grafico")
     );
+    if (hasInternalData) return true;
+    const pageText = String(document.body?.innerText || "").slice(0, 12000);
+    const sameGraphUi = hasGraphUi && /Tend[eê]ncias/i.test(pageText) && /Refer[eê]ncia/i.test(pageText);
+    return /(^|\.)(caramelotips|thtips)\.com\.br$/i.test(location.hostname) && sameGraphUi;
   }
 
   function desiredNativeMarket() {
@@ -3010,7 +3019,8 @@ window.BBTipsRobo={
       document.getElementById("grafico") ||
       window.__graficoPrincipalNovoAPI ||
       window.__gpLastCfg ||
-      window.__ultimoPontosSelecionado
+      window.__ultimoPontosSelecionado ||
+      window.LOADED_JSON?.table?.rows
     );
     if (!nativeRuntime) return null;
     const cfg = window.__gpLastCfg;
@@ -3550,13 +3560,22 @@ window.BBTipsRobo={
       .filter((point) => point.marker === "white" && point.sourceIndex > 0 && Number(point.delta) !== 0);
     const last = whites[whites.length - 1] || null;
     const age = last ? ordered.length - 1 - last.sourceIndex : Infinity;
-    const move = Number(last?.delta || 0);
+    const recentWhites = whites.filter((point) => ordered.length - 1 - point.sourceIndex <= maxAge);
+    const net = whites.reduce((sum, point) => sum + Number(point.delta || 0), 0);
+    const recentNet = recentWhites.reduce((sum, point) => sum + Number(point.delta || 0), 0);
+    const up = whites.filter((point) => Number(point.delta) > 0).length;
+    const down = whites.filter((point) => Number(point.delta) < 0).length;
     return {
       count: whites.length,
-      move,
+      up,
+      down,
+      net,
+      recentCount: recentWhites.length,
+      recentNet,
+      move: recentNet,
       age,
-      recent: Boolean(last && age <= maxAge),
-      direction: move > 0 ? "subindo" : move < 0 ? "descendo" : "sem movimento"
+      recent: recentWhites.length > 0 && recentNet !== 0,
+      direction: recentNet > 0 ? "subindo" : recentNet < 0 ? "descendo" : "equilibrada"
     };
   }
 
@@ -4093,7 +4112,7 @@ window.BBTipsRobo={
     }
 
     return {
-      status: points.length + " pts foco | brancas " + whiteEdge.count + " | ultima branca " + whiteEdge.direction + (Number.isFinite(whiteEdge.age) ? " ha " + whiteEdge.age + " pts" : "") + " | atual " + formatGraphValue(current) + " | faixa " + formatGraphValue(min) + "-" + formatGraphValue(max) + " | hist " + (hist?.length || 0) + " barras | ponta direita",
+      status: points.length + " pts foco | brancas somadas " + whiteEdge.count + " (subiu " + whiteEdge.up + "/desceu " + whiteEdge.down + ", saldo " + (whiteEdge.net > 0 ? "+" : "") + formatGraphValue(whiteEdge.net) + ") | direita " + whiteEdge.recentCount + " brancas, saldo " + (whiteEdge.recentNet > 0 ? "+" : "") + formatGraphValue(whiteEdge.recentNet) + " | atual " + formatGraphValue(current) + " | faixa " + formatGraphValue(min) + "-" + formatGraphValue(max) + " | hist " + (hist?.length || 0) + " barras",
       sinal,
       color,
       forca: force + "%",
@@ -4124,6 +4143,10 @@ window.BBTipsRobo={
         histWeakening: histA.ok ? histA.weakening : false,
         slope: score,
         whiteCount: whiteEdge.count,
+        whiteUp: whiteEdge.up,
+        whiteDown: whiteEdge.down,
+        whiteNet: whiteEdge.net,
+        recentWhiteNet: whiteEdge.recentNet,
         lastWhiteDirection: whiteEdge.direction,
         lastWhiteAge: Number.isFinite(whiteEdge.age) ? whiteEdge.age : null
       }
