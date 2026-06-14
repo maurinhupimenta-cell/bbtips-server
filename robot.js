@@ -22,6 +22,7 @@ const SCHEDULE_TIME_ZONE="Europe/London";
 let PANEL_HOVER=false;
 let SCANNER_GRAPH_AUTO_MIN=false;
 let SCANNER_MANUAL_OPEN=false;
+let ACTIVE_LIGA_BLOCKED=false;
 let TOOLTIP_SERIES=[];
 let RESULTS_CACHE=[];
 let API_ROWS=[];
@@ -775,6 +776,7 @@ function ligaFromUrl(url){
   }catch(e){return null}
 }
 function activeLiga(){
+  ACTIVE_LIGA_BLOCKED=false;
   if(!CONFIG.ligaAuto)return null;
   try{
     const caramelo=carameloLigaFromUrl(carameloDatasetUrl());
@@ -800,6 +802,10 @@ function activeLiga(){
     const score=active+aria+selected+Math.min(60,r.width/4)+(240-r.top)/4;
     if(score>bestScore){bestScore=score;best=names[txt]}
   });
+  if(best===6&&currentPlatform()==="BET365"){
+    ACTIVE_LIGA_BLOCKED=true;
+    return null;
+  }
   return best;
 }
 function ligaNome(){const l=activeLiga();return l?`Liga ${l}`:"Liga auto"}
@@ -1990,6 +1996,8 @@ function anchorAttentionBox(games){
 }
 function notifyAnchors(games){
   if(!CONFIG.alerts)return;
+  activeLiga();
+  if(ACTIVE_LIGA_BLOCKED)return;
   const alerts=anchorAttention(games).filter(a=>a.stat.j>=3&&a.stat.g>=3&&a.stat.p>=70);
   if(!alerts.length)return;
   const now=Date.now();
@@ -2140,6 +2148,8 @@ function analyze(){
 }
 function notify(signals){
   if(!CONFIG.alerts)return;
+  activeLiga();
+  if(ACTIVE_LIGA_BLOCKED)return;
   let old=[];try{old=JSON.parse(localStorage.getItem(SEEN)||"[]")}catch(e){}
   const seen=new Set(old);
   signals.slice(0,5).forEach(s=>{
@@ -2155,6 +2165,8 @@ function notify(signals){
 }
 function notifyFundo(series){
   if(!CONFIG.alerts)return;
+  activeLiga();
+  if(ACTIVE_LIGA_BLOCKED)return;
   const fundos=[...globalFundos(series),...visualFundos(series)];
   if(!fundos.length)return;
   let old=[];try{old=JSON.parse(localStorage.getItem(SEEN+"_FUNDO")||"[]")}catch(e){}
@@ -2174,6 +2186,8 @@ function notifyFundo(series){
 }
 function notifyTrendUp(){
   if(!CONFIG.alerts)return;
+  activeLiga();
+  if(ACTIVE_LIGA_BLOCKED)return;
   const sinais=trendUpSignals();
   if(!sinais.length)return;
   let old=[];try{old=JSON.parse(localStorage.getItem(SEEN+"_TRENDUP")||"[]")}catch(e){}
@@ -2923,6 +2937,22 @@ window.BBTipsRobo={
     return false;
   }
 
+  function nativeMarkerKind(color) {
+    const value = String(color || "").replace(/\s+/g, "").toLowerCase();
+    if (value.includes("4caf50") || value.includes("rgb(76,175,80)")) return "green";
+    if (value.includes("ff3b30") || value.includes("rgb(255,59,48)")) return "red";
+    if (value.includes("204,204,204") || value === "#ccc" || value === "#cccccc" || value === "white" || value === "#fff" || value === "#ffffff") return "white";
+    return "unknown";
+  }
+
+  function nativeMarkerKindsFromConfig(cfg, marketKey, length) {
+    if (!Array.isArray(cfg?.datasets)) return [];
+    const dataset = cfg.datasets.find((item) => nativeMarketKey(item?._tipo) === marketKey && Number(item?.order) === 0) ||
+      cfg.datasets.find((item) => nativeMarketKey(item?._tipo) === marketKey);
+    if (!Array.isArray(dataset?.markerColors) || dataset.markerColors.length !== length) return [];
+    return dataset.markerColors.map(nativeMarkerKind);
+  }
+
   function internalResultsFromLoadedJson() {
     const source = window.LOADED_JSON;
     if (source && source === internalResultsCacheSource) return internalResultsCache;
@@ -2947,24 +2977,30 @@ window.BBTipsRobo={
     return internalResultsCache;
   }
 
-  function calculateNativeSeries(market) {
+  function calculateNativeGraphSeries(market) {
     const results = internalResultsFromLoadedJson();
     const requested = Math.max(40, parseInt(document.getElementById("qtd")?.value, 10) || 120);
     const used = results.slice(0, requested);
     const blockCount = Math.floor(used.length / 20);
-    if (blockCount < 2) return [];
+    if (blockCount < 2) return { values: [], markerKinds: [] };
     const blocks = Array.from({ length: blockCount }, (_, index) => used.slice(index * 20, index * 20 + 20));
     const newest = blocks[blocks.length - 1];
     const initial = newest.filter((game) => nativeMarketPays(game, market)).length / newest.length * 100;
-    const points = [initial];
+    const values = [initial];
+    const markerKinds = ["white"];
     for (let block = blockCount - 2; block >= 0; block -= 1) {
       for (let index = 19; index >= 0; index -= 1) {
         const currentPays = nativeMarketPays(blocks[block][index], market);
         const referencePays = nativeMarketPays(blocks[block + 1][index], market);
-        points.push(points[points.length - 1] + (currentPays && !referencePays ? 5 : !currentPays && referencePays ? -5 : 0));
+        values.push(values[values.length - 1] + (currentPays && !referencePays ? 5 : !currentPays && referencePays ? -5 : 0));
+        markerKinds.push(currentPays && referencePays ? "green" : !currentPays && !referencePays ? "red" : "white");
       }
     }
-    return points;
+    return { values, markerKinds };
+  }
+
+  function calculateNativeSeries(market) {
+    return calculateNativeGraphSeries(market).values;
   }
 
   function readNativeGraphData() {
@@ -2985,13 +3021,21 @@ window.BBTipsRobo={
     const activeMarket = resolvedMarket?.value || "";
     const marketKey = resolvedMarket?.key || "";
     const canUseInternalPoints = Boolean(graphMarket);
-    const calculatedValues = canUseInternalPoints && (cfgValues.length >= 20 || siteValues.length >= 20) ? [] : calculateNativeSeries(activeMarket);
+    const calculated = canUseInternalPoints && (cfgValues.length >= 20 || siteValues.length >= 20)
+      ? { values: [], markerKinds: [] }
+      : calculateNativeGraphSeries(activeMarket);
     const rawValues = canUseInternalPoints && cfgValues.length >= 20
       ? cfgValues
       : canUseInternalPoints && siteValues.length >= 20
         ? siteValues
-        : calculatedValues;
+        : calculated.values;
     const values = rawValues.map(Number).filter(Number.isFinite);
+    const configuredMarkers = canUseInternalPoints ? nativeMarkerKindsFromConfig(cfg, marketKey, values.length) : [];
+    const markerKinds = configuredMarkers.length === values.length
+      ? configuredMarkers
+      : calculated.markerKinds.length === values.length
+        ? calculated.markerKinds
+        : values.map((value, index) => index > 0 && value !== values[index - 1] ? "white" : "unknown");
 
     if (!marketKey) {
       return isCarameloGraphPage()
@@ -3008,7 +3052,13 @@ window.BBTipsRobo={
         : null;
     }
 
-    const points = values.map((value, index) => ({ x: index, y: -value, v: value }));
+    const points = values.map((value, index) => ({
+      x: index,
+      y: -value,
+      v: value,
+      delta: index ? value - values[index - 1] : 0,
+      marker: markerKinds[index] || "unknown"
+    }));
     const hist = nativeMacdHistogram(values).map((value, index) => ({ x: index, y: 0, v: value }));
     return {
       chart: document.getElementById("grafico") || biggestChart(),
@@ -3493,6 +3543,23 @@ window.BBTipsRobo={
     return focused.length >= 18 ? focused : ordered.slice(-45);
   }
 
+  function nativeWhiteEdge(points, maxAge = 10) {
+    const ordered = (points || []).slice().sort((a, b) => a.x - b.x);
+    const whites = ordered
+      .map((point, index) => ({ ...point, sourceIndex: index }))
+      .filter((point) => point.marker === "white" && point.sourceIndex > 0 && Number(point.delta) !== 0);
+    const last = whites[whites.length - 1] || null;
+    const age = last ? ordered.length - 1 - last.sourceIndex : Infinity;
+    const move = Number(last?.delta || 0);
+    return {
+      count: whites.length,
+      move,
+      age,
+      recent: Boolean(last && age <= maxAge),
+      direction: move > 0 ? "subindo" : move < 0 ? "descendo" : "sem movimento"
+    };
+  }
+
   function readMatchGoals() {
     const internalGoals = readInternalMatchGoals();
     if (internalGoals.length >= 8) return internalGoals;
@@ -3848,10 +3915,12 @@ window.BBTipsRobo={
     const sMicro = slope(micro);
     const vol = volatility(smooth) || 1;
     const score = s1 / vol;
-    const rawEdge = points.slice(-Math.min(6, points.length)).map((p) => ({ ...p, v: -p.y }));
+    const orderedRaw = points.slice().sort((a, b) => a.x - b.x);
+    const rawEdge = orderedRaw.slice(-Math.min(12, orderedRaw.length)).map((p) => ({ ...p, v: -p.y }));
     const edgeMove = rawEdge.length >= 2 ? rawEdge[rawEdge.length - 1].v - rawEdge[0].v : 0;
     const edgeVol = volatility(rawEdge) || vol;
     const microScore = (edgeMove / Math.max(1, rawEdge.length - 1)) / Math.max(0.01, edgeVol);
+    const whiteEdge = nativeWhiteEdge(orderedRaw, 10);
     const force = Math.min(100, Math.round(Math.abs(score) * 85));
     const baseForZone = allPoints && allPoints.length > points.length ? allPoints.map((p) => ({ ...p, v: -p.y })) : smooth;
     const values = baseForZone.map((p) => p.v);
@@ -3888,8 +3957,8 @@ window.BBTipsRobo={
       nota = "O grafico esta perdendo terreno e inclinando para baixo. Tendencia favorece baixa enquanto mantiver forca.";
     }
 
-    const pontaCaindo = microScore < -0.28;
-    const pontaSubindo = microScore > 0.28;
+    const pontaCaindo = whiteEdge.recent ? whiteEdge.move < 0 : microScore < -0.28;
+    const pontaSubindo = whiteEdge.recent ? whiteEdge.move > 0 : microScore > 0.28;
     if (pontaCaindo) {
       sinal = score > 0.18 ? "RECUO" : "BAIXA";
       color = "#ff4d5f";
@@ -4024,7 +4093,7 @@ window.BBTipsRobo={
     }
 
     return {
-      status: points.length + " pts foco | atual " + formatGraphValue(current) + " | faixa " + formatGraphValue(min) + "-" + formatGraphValue(max) + " | hist " + (hist?.length || 0) + " barras | ponta direita",
+      status: points.length + " pts foco | brancas " + whiteEdge.count + " | ultima branca " + whiteEdge.direction + (Number.isFinite(whiteEdge.age) ? " ha " + whiteEdge.age + " pts" : "") + " | atual " + formatGraphValue(current) + " | faixa " + formatGraphValue(min) + "-" + formatGraphValue(max) + " | hist " + (hist?.length || 0) + " barras | ponta direita",
       sinal,
       color,
       forca: force + "%",
@@ -4053,7 +4122,10 @@ window.BBTipsRobo={
         histRead: histA.ok,
         histPositive: histA.ok ? histA.positive : false,
         histWeakening: histA.ok ? histA.weakening : false,
-        slope: score
+        slope: score,
+        whiteCount: whiteEdge.count,
+        lastWhiteDirection: whiteEdge.direction,
+        lastWhiteAge: Number.isFinite(whiteEdge.age) ? whiteEdge.age : null
       }
     };
   }

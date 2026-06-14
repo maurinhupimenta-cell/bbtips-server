@@ -41,7 +41,10 @@ const functions = [
   "storedNativeMarket",
   "resolveNativeMarket",
   "nativeMarketPays",
+  "nativeMarkerKind",
+  "nativeMarkerKindsFromConfig",
   "internalResultsFromLoadedJson",
+  "calculateNativeGraphSeries",
   "calculateNativeSeries",
   "readNativeGraphData"
 ];
@@ -119,6 +122,26 @@ const direct = run({
 assert.equal(direct.points.length, 120);
 assert.match(direct.sourcePath, /__gpLastCfg/);
 
+const directWithColors = run({
+  cfg: {
+    tipoLinha: "over25",
+    pontosSelecionado: [30, 35, 35, 35, ...directPoints.slice(4)],
+    datasets: [{
+      _tipo: "over25",
+      order: 0,
+      markerColors: ["rgb(204,204,204)", "rgb(204,204,204)", "#4CAF50", "#FF3B30", ...directPoints.slice(4).map(() => "#4CAF50")]
+    }]
+  },
+  selectedMarket: "over25",
+  rows
+});
+assert.equal(directWithColors.points[1].marker, "white");
+assert.equal(directWithColors.points[1].delta, 5);
+assert.equal(directWithColors.points[2].marker, "green");
+assert.equal(directWithColors.points[2].delta, 0);
+assert.equal(directWithColors.points[3].marker, "red");
+assert.equal(directWithColors.points[3].delta, 0);
+
 const recalculated = run({
   cfg: { pontosSelecionado: directPoints },
   points: directPoints,
@@ -138,6 +161,62 @@ assert.equal(waiting.waiting, true);
 
 const parsedFt = recalculated.points.map((point) => point.v);
 assert.ok(Math.max(...parsedFt) > Math.min(...parsedFt), "a serie FT nao pode ficar plana pelo HT 0-0");
+const recalculatedWhites = recalculated.points.filter((point) => point.marker === "white" && point.delta !== 0);
+assert.ok(recalculatedWhites.some((point) => point.delta > 0), "precisa preservar branca de subida");
+assert.ok(recalculatedWhites.some((point) => point.delta < 0), "precisa preservar branca de descida");
+
+function testActiveLiga(platform, label) {
+  const context = {
+    CONFIG: { ligaAuto: true },
+    ACTIVE_LIGA_BLOCKED: false,
+    currentPlatform: () => platform,
+    carameloLigaFromUrl: () => null,
+    carameloDatasetUrl: () => "",
+    esc: (value) => String(value),
+    innerHeight: 900,
+    getComputedStyle: () => ({ backgroundColor: "rgb(65, 82, 190)" }),
+    document: {
+      querySelectorAll: () => [{
+        innerText: label,
+        className: "active",
+        getAttribute: () => null,
+        getBoundingClientRect: () => ({ width: 180, height: 60, top: 10 })
+      }]
+    },
+    result: null
+  };
+  vm.createContext(context);
+  vm.runInContext(`${extractFunction("activeLiga")}\nresult={liga:activeLiga(),blocked:ACTIVE_LIGA_BLOCKED};`, context);
+  return context.result;
+}
+
+assert.deepEqual(JSON.parse(JSON.stringify(testActiveLiga("BET365", "Express"))), { liga: null, blocked: true });
+assert.deepEqual(JSON.parse(JSON.stringify(testActiveLiga("BET365", "Copa"))), { liga: 1, blocked: false });
+
+function testWhiteEdge(points) {
+  const context = { result: null };
+  vm.createContext(context);
+  vm.runInContext(`${extractFunction("nativeWhiteEdge")}\nresult=nativeWhiteEdge(${JSON.stringify(points)},10);`, context);
+  return JSON.parse(JSON.stringify(context.result));
+}
+
+const whiteUp = testWhiteEdge([
+  { x: 0, v: 30, delta: 0, marker: "red" },
+  { x: 1, v: 35, delta: 5, marker: "white" },
+  { x: 2, v: 35, delta: 0, marker: "green" }
+]);
+assert.equal(whiteUp.direction, "subindo");
+assert.equal(whiteUp.count, 1);
+assert.equal(whiteUp.age, 1);
+assert.equal(whiteUp.recent, true);
+
+const whiteDown = testWhiteEdge([
+  { x: 0, v: 35, delta: 0, marker: "green" },
+  { x: 1, v: 30, delta: -5, marker: "white" },
+  { x: 2, v: 30, delta: 0, marker: "red" }
+]);
+assert.equal(whiteDown.direction, "descendo");
+assert.equal(whiteDown.move, -5);
 
 function independentlyParseFtResults(rows) {
   const results = [];
@@ -157,7 +236,7 @@ function independentlyParseFtResults(rows) {
 function independentlyCalculateSeries(results, market, requested = 120) {
   const used = results.slice(0, requested);
   const blockCount = Math.floor(used.length / 20);
-  if (blockCount < 2) return [];
+  if (blockCount < 2) return { values: [], markerKinds: [] };
   const pays = (game) => {
     const total = game.casa + game.fora;
     if (market === "over25") return total > 2.5;
@@ -166,15 +245,17 @@ function independentlyCalculateSeries(results, market, requested = 120) {
   };
   const blocks = Array.from({ length: blockCount }, (_, index) => used.slice(index * 20, index * 20 + 20));
   const newest = blocks.at(-1);
-  const points = [newest.filter(pays).length / newest.length * 100];
+  const values = [newest.filter(pays).length / newest.length * 100];
+  const markerKinds = ["white"];
   for (let block = blockCount - 2; block >= 0; block -= 1) {
     for (let index = 19; index >= 0; index -= 1) {
       const currentPays = pays(blocks[block][index]);
       const referencePays = pays(blocks[block + 1][index]);
-      points.push(points.at(-1) + (currentPays && !referencePays ? 5 : !currentPays && referencePays ? -5 : 0));
+      values.push(values.at(-1) + (currentPays && !referencePays ? 5 : !currentPays && referencePays ? -5 : 0));
+      markerKinds.push(currentPays && referencePays ? "green" : !currentPays && !referencePays ? "red" : "white");
     }
   }
-  return points;
+  return { values, markerKinds };
 }
 
 if (process.env.BBTIPS_LIVE_JSON) {
@@ -182,15 +263,18 @@ if (process.env.BBTIPS_LIVE_JSON) {
   const liveRows = live?.table?.rows || [];
   const independentResults = independentlyParseFtResults(liveRows);
   assert.ok(independentResults.length >= 40, "JSON real precisa ter ao menos dois blocos completos");
+  const summaries = [];
   for (const [scannerMarket, market] of [["over25", "over25"], ["over35", "over35"], ["ambas_sim", "ambas sim"]]) {
-    const actual = Array.from(
-      run({ cfg: {}, rows: liveRows, scannerMarket }).points,
+    const actualPoints = Array.from(run({ cfg: {}, rows: liveRows, scannerMarket }).points);
+    const actual = actualPoints.map(
       (point) => Number(point.v)
     );
     const expected = independentlyCalculateSeries(independentResults, market);
-    assert.deepEqual(actual, expected, `${market}: serie interna divergiu da conferencia independente`);
+    assert.deepEqual(actual, expected.values, `${market}: serie interna divergiu da conferencia independente`);
+    assert.deepEqual(actualPoints.map((point) => String(point.marker)), expected.markerKinds, `${market}: cores internas divergiram da conferencia independente`);
+    summaries.push(`${market} brancas=${expected.markerKinds.filter((kind) => kind === "white").length} verdes=${expected.markerKinds.filter((kind) => kind === "green").length} vermelhas=${expected.markerKinds.filter((kind) => kind === "red").length}`);
   }
-  console.log(`graph-native-live: ok (${independentResults.length} placares FT)`);
+  console.log(`graph-native-live: ok (${independentResults.length} placares FT; ${summaries.join("; ")})`);
 }
 
 console.log("graph-native: ok");
