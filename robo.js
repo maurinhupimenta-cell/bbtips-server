@@ -2318,8 +2318,13 @@ function syncScannerWithGraph(){
   const graphOpen=graphPanelIsOpen();
   const wasMin=P.classList.contains("min");
   if(graphOpen){
-    P.classList.add("min");
-    SCANNER_GRAPH_AUTO_MIN=true;
+    if(SCANNER_MANUAL_OPEN){
+      P.classList.remove("min");
+      SCANNER_GRAPH_AUTO_MIN=false;
+    }else{
+      P.classList.add("min");
+      SCANNER_GRAPH_AUTO_MIN=true;
+    }
   }else if(!graphOpen&&SCANNER_GRAPH_AUTO_MIN){
     P.classList.remove("min");
     SCANNER_GRAPH_AUTO_MIN=false;
@@ -2793,11 +2798,93 @@ window.BBTipsRobo={
   }
 
   function nativeMarketKey(value) {
-    const market = String(value || "").toLowerCase();
-    if (market === "over25") return "over25";
-    if (market === "over35") return "over35";
-    if (market === "ambas sim") return "ambas_sim";
+    const market = String(value || "")
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .toLowerCase()
+      .replace(/[_-]+/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+    const compact = market.replace(/[^a-z0-9]+/g, "");
+    if (compact === "over25" || compact === "o25") return "over25";
+    if (compact === "over35" || compact === "o35") return "over35";
+    if (["ambassim", "ambasmarcamsim", "bttssim"].includes(compact)) return "ambas_sim";
     return "";
+  }
+
+  function nativeMarketValue(key) {
+    if (key === "over25") return "over25";
+    if (key === "over35") return "over35";
+    if (key === "ambas_sim") return "ambas sim";
+    return "";
+  }
+
+  function marketCandidate(value, source) {
+    const key = nativeMarketKey(value);
+    return key ? { key, value: nativeMarketValue(key), source } : null;
+  }
+
+  function selectedControlMarket(root, source) {
+    if (!root?.querySelectorAll) return null;
+    const controls = Array.from(root.querySelectorAll("select, input:checked"));
+    for (const control of controls) {
+      if (control.closest?.("#bbtips-robo-root, #hb-tips-scanner, #bbtips-api-alertas")) continue;
+      const text = control.tagName === "SELECT"
+        ? control.selectedOptions?.[0]?.textContent || ""
+        : control.labels?.[0]?.textContent || "";
+      const found = marketCandidate(control.value, source) || marketCandidate(text, source);
+      if (found) return found;
+    }
+    return null;
+  }
+
+  function activeChipMarket(root, source) {
+    if (!root?.querySelectorAll) return null;
+    const selector = [
+      '[aria-selected="true"]', '[aria-pressed="true"]', '[data-active="true"]',
+      ".active", ".ativo", ".selected", ".selecionado"
+    ].join(",");
+    const active = Array.from(root.querySelectorAll(selector));
+    for (const element of active) {
+      if (element.closest?.("#bbtips-robo-root, #hb-tips-scanner, #bbtips-api-alertas")) continue;
+      const text = String(element.textContent || "").trim();
+      if (!text || text.length > 80) continue;
+      const found = marketCandidate(element.dataset?.tipo, source) || marketCandidate(element.dataset?.value, source) || marketCandidate(text, source);
+      if (found) return found;
+    }
+    return null;
+  }
+
+  function storedNativeMarket() {
+    try {
+      const prefs = JSON.parse(localStorage.getItem("caramelo:grafico:prefs:v3") || "null");
+      return marketCandidate(prefs?.linhaFT || prefs?.tipoLinha, "preferencia salva do grafico");
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function resolveNativeMarket(cfg) {
+    const selectedDataset = Array.isArray(cfg?.datasets)
+      ? cfg.datasets.find((dataset) => Number(dataset?.order) === 0 && dataset?._tipo) ||
+        cfg.datasets.find((dataset) => dataset?._tipo && String(dataset?.color || "").toLowerCase() === "#ffffff")
+      : null;
+    const direct = [
+      marketCandidate(cfg?.tipoLinha, "configuracao interna do grafico"),
+      marketCandidate(selectedDataset?._tipo, "serie principal do grafico"),
+      marketCandidate(document.getElementById("linhaFT")?.value, "seletor linhaFT")
+    ].find(Boolean);
+    if (direct) return direct;
+
+    const graphRoot = document.getElementById("graficoPrincipalNovoPanel") ||
+      document.getElementById("grafico")?.closest?.(".chart-panel, .grafico-container, [id*='grafico'], [class*='grafico']") ||
+      document.querySelector(".chart-panel, .grafico-container, [class*='grafico'][class*='container']");
+    const scoped = selectedControlMarket(graphRoot, "controle selecionado do grafico") ||
+      activeChipMarket(graphRoot, "botao ativo do grafico") ||
+      storedNativeMarket();
+    if (scoped) return scoped;
+    return selectedControlMarket(document, "controle selecionado da pagina") ||
+      activeChipMarket(document, "botao ativo da pagina");
   }
 
   function nativeMarketPays(game, market) {
@@ -2862,22 +2949,18 @@ window.BBTipsRobo={
     );
     if (!nativeRuntime) return null;
     const cfg = window.__gpLastCfg;
-    const selectedDataset = Array.isArray(cfg?.datasets)
-      ? cfg.datasets.find((dataset) => Number(dataset?.order) === 0 && dataset?._tipo)
-      : null;
-    const activeMarket = String(cfg?.tipoLinha || selectedDataset?._tipo || document.getElementById("linhaFT")?.value || "").toLowerCase();
-    const marketKey = nativeMarketKey(activeMarket);
+    const resolvedMarket = resolveNativeMarket(cfg);
+    const activeMarket = resolvedMarket?.value || "";
+    const marketKey = resolvedMarket?.key || "";
     const cfgValues = Array.isArray(cfg?.pontosSelecionado) ? cfg.pontosSelecionado : [];
     const siteValues = Array.isArray(window.__ultimoPontosSelecionado) ? window.__ultimoPontosSelecionado : [];
     const calculatedValues = cfgValues.length >= 20 || siteValues.length >= 20 ? [] : calculateNativeSeries(activeMarket);
     const rawValues = cfgValues.length >= 20 ? cfgValues : siteValues.length >= 20 ? siteValues : calculatedValues;
     const values = rawValues.map(Number).filter(Number.isFinite);
 
-    if (!marketKey) {
-      return { waiting: true, message: "Selecione Over 2.5, Over 3.5 ou Ambas Sim no grafico." };
-    }
+    if (!marketKey) return null;
     if (values.length < 20) {
-      return { waiting: true, message: "Aguardando o site publicar os pontos internos do grafico." };
+      return null;
     }
 
     const points = values.map((value, index) => ({ x: index, y: -value, v: value }));
@@ -2888,11 +2971,11 @@ window.BBTipsRobo={
       hist,
       marketKey,
       source: "caramelo-data",
-      sourcePath: cfgValues.length >= 20
+      sourcePath: (resolvedMarket?.source || "mercado detectado") + " | " + (cfgValues.length >= 20
         ? "window.__gpLastCfg.pontosSelecionado"
         : siteValues.length >= 20
           ? "window.__ultimoPontosSelecionado"
-          : "recalculado de window.LOADED_JSON"
+          : "recalculado de window.LOADED_JSON")
     };
   }
 
