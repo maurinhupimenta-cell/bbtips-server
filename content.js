@@ -2,6 +2,18 @@ const SCRIPT_ID = "bbtips-robo-injected-script";
 const API_BASE = "https://bbtips-server-production.up.railway.app";
 let CHECK_TIMER = null;
 let LAST_BRIDGE_SEND = 0;
+async function bridgeGraphData(message) {
+  const liga = Number(message?.liga);
+  const requestId = String(message?.requestId || "");
+  if (!requestId || liga < 1 || liga > 5) return;
+  try {
+    const response = await chrome.runtime.sendMessage({ type: "BBTIPS_FETCH_GRAPH_DATA", liga });
+    if (!response?.ok || !Array.isArray(response?.json?.table?.rows)) throw new Error(response?.error || "JSON sem linhas");
+    window.postMessage({ type: "BBTIPS_GRAPH_DATA_RESPONSE", source: "bbtips_content", requestId, liga, json: response.json }, "*");
+  } catch (error) {
+    window.postMessage({ type: "BBTIPS_GRAPH_DATA_RESPONSE", source: "bbtips_content", requestId, liga, error: String(error?.message || error) }, "*");
+  }
+}
 
 function injectRemoteConfig(apiBase, token, username) {
   const cfg = document.createElement("script");
@@ -44,6 +56,10 @@ async function sendCollectorRows(rows, sentAt, meta = {}) {
 window.addEventListener("message", (event) => {
   if (event.source !== window) return;
   const msg = event.data || {};
+  if (msg.type === "BBTIPS_GRAPH_DATA_REQUEST" && msg.source === "bbtips_robot") {
+    bridgeGraphData(msg);
+    return;
+  }
   if (msg.type !== "BBTIPS_AGENT_ROWS" || msg.source !== "bbtips_extension") return;
   sendCollectorRows(msg.rows, msg.sentAt, { platform: msg.platform, hours: msg.hours, force: msg.force });
 });

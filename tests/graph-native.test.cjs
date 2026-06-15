@@ -43,6 +43,8 @@ const functions = [
   "nativeMarketPays",
   "nativeMarkerKind",
   "nativeMarkerKindsFromConfig",
+  "activeGraphLiga",
+  "requestBridgedGraphData",
   "internalResultsFromLoadedJson",
   "calculateNativeGraphSeries",
   "calculateNativeSeries",
@@ -52,9 +54,15 @@ const functions = [
 const runtimeCode = [
   "let internalResultsCacheSource = null;",
   "let internalResultsCache = [];",
+  "let bridgedGraphJson = null;",
+  "let bridgedGraphLiga = 0;",
+  "let graphBridgePending = false;",
+  "let graphBridgeRequestedAt = 0;",
+  "let graphBridgeError = '';",
   ...functions.map(extractFunction),
   "function biggestChart() { return null; }",
   "function nativeMacdHistogram(values) { return values.map(() => 0); }",
+  "if (window.__testBridgedJson) bridgedGraphJson = window.__testBridgedJson;",
   "result = readNativeGraphData();"
 ].join("\n");
 
@@ -71,7 +79,7 @@ function rowsFromScores(scores) {
   return rows;
 }
 
-function run({ cfg, points = [], rows = null, selectedMarket = "", scannerMarket = "over25", hostname = "www.caramelotips.com.br", includeGraphElement = true }) {
+function run({ cfg, points = [], rows = null, bridgedRows = null, selectedMarket = "", scannerMarket = "over25", hostname = "www.caramelotips.com.br", includeGraphElement = true }) {
   const elements = {
     graficoPrincipalNovoPanel: { querySelectorAll: () => [] },
     linhaFT: { value: selectedMarket },
@@ -83,7 +91,9 @@ function run({ cfg, points = [], rows = null, selectedMarket = "", scannerMarket
       __gpLastCfg: cfg,
       __ultimoPontosSelecionado: points,
       LOADED_JSON: rows ? { table: { rows } } : null,
-      BBTipsRobo: { config: { market: scannerMarket } }
+      __testBridgedJson: bridgedRows ? { table: { rows: bridgedRows } } : null,
+      BBTipsRobo: { config: { market: scannerMarket }, activeLiga: () => 1 },
+      postMessage: () => {}
     },
     document: {
       getElementById: (id) => elements[id] || null,
@@ -92,6 +102,7 @@ function run({ cfg, points = [], rows = null, selectedMarket = "", scannerMarket
       body: { innerText: "Tendencias Referencia" }
     },
     location: { hostname },
+    sessionStorage: { getItem: () => null },
     localStorage: { getItem: () => null },
     Array,
     Boolean,
@@ -176,6 +187,16 @@ const thtipsInternal = run({
 });
 assert.equal(thtipsInternal.points.length, 41, "THTips deve calcular todos os pontos pelo JSON interno");
 assert.match(thtipsInternal.sourcePath, /CONTAGEM EXATA/);
+
+const thtipsBridged = run({
+  cfg: null,
+  bridgedRows: rows,
+  scannerMarket: "over25",
+  hostname: "thtips.com.br",
+  includeGraphElement: false
+});
+assert.equal(thtipsBridged.points.length, 41, "ponte da extensao deve tirar o grafico do estado aguardando");
+assert.equal(thtipsBridged.points.filter((point) => point.marker === "white" && point.delta !== 0).length > 0, true);
 
 function testActiveLiga(platform, label) {
   const context = {
