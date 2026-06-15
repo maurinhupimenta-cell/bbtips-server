@@ -72,16 +72,11 @@ async function injectRobot() {
   injectRemoteConfig(apiBase, token, res.bbtips_user || "");
   const s = document.createElement("script");
   s.id = SCRIPT_ID;
-  s.src = `${apiBase}/api/robo.js?token=${encodeURIComponent(token)}&v=${Date.now()}`;
+  // Keep the tested graph reader bundled with the installed extension. Loading
+  // it from the server allowed an older deploy to replace the current reader.
+  s.src = chrome.runtime.getURL("robot.js") + "?v=" + Date.now();
   s.onload = () => s.remove();
-  s.onerror = () => {
-    s.remove();
-    const fallback = document.createElement("script");
-    fallback.id = SCRIPT_ID;
-    fallback.src = chrome.runtime.getURL("robot.js") + "?v=" + Date.now();
-    fallback.onload = () => fallback.remove();
-    (document.head || document.documentElement).appendChild(fallback);
-  };
+  s.onerror = () => s.remove();
   (document.head || document.documentElement).appendChild(s);
 }
 

@@ -60,8 +60,11 @@ function request(liga) {
   assert.equal(invalid.ok, false, "Bet365 nao deve buscar liga 6");
 
   const manifest = JSON.parse(fs.readFileSync("manifest.json", "utf8"));
+  const contentSource = fs.readFileSync("content.js", "utf8");
   assert.equal(manifest.background?.service_worker, "background.js");
   assert.ok(manifest.host_permissions.some((value) => value.includes("caramelotips.com.br")));
+  assert.match(contentSource, /chrome\.runtime\.getURL\("robot\.js"\)/, "leitor precisa vir do pacote instalado");
+  assert.doesNotMatch(contentSource, /\/api\/robo\.js/, "servidor nao pode substituir o leitor local");
   console.log("graph-bridge: ok");
 })().catch((error) => {
   console.error(error);
