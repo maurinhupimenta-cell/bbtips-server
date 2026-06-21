@@ -2495,8 +2495,8 @@ window.BBTipsRobo={
   const PATTERN_HISTORY_KEY = "bbtips-robo-pattern-history-v2";
   const LAST_PATTERN_KEY = "bbtips-robo-last-pattern-v2";
   const RIGHT_FOCUS_RATIO = 0.50;
-  const LOOP_MS = 10000;
-  const SLOW_SCAN_MS = 12000;
+  const LOOP_MS = 18000;
+  const SLOW_SCAN_MS = 45000;
   const MIN_VISUAL_SIMILARS = 20;
   const SCORE_RE = /(?:^|[^\d])(\d{1,2})\s*[-xX]\s*(\d{1,2})(?=$|[^\d])/g;
   let panel;
@@ -2983,15 +2983,49 @@ window.BBTipsRobo={
     return dataset.markerColors.map(nativeMarkerKind);
   }
 
+  function graphLigaFromSource(value) {
+    const text = String(value || "").toLowerCase();
+    const match = text.match(/(?:^|[\\/])(copa|euro|super|premier|split)(?:\.json)?(?:$|[?#])/i) ||
+      text.match(/^(copa|euro|super|premier|split)$/i);
+    return match ? ({ copa: 1, euro: 2, super: 3, premier: 4, split: 5 }[match[1].toLowerCase()] || 0) : 0;
+  }
+
   function activeGraphLiga() {
-    const direct = Number(window.BBTipsRobo?.activeLiga?.());
-    if (direct >= 1 && direct <= 5) return direct;
     try {
-      const stored = String(sessionStorage.getItem("datasetPath") || sessionStorage.getItem("ligaAtual") || "");
-      const match = stored.toLowerCase().match(/(?:^|\/)(copa|euro|super|premier|split)(?:\.json)?(?:$|[?#])/);
-      if (match) return { copa: 1, euro: 2, super: 3, premier: 4, split: 5 }[match[1]] || 0;
+      const resources = performance.getEntriesByType?.("resource") || [];
+      for (let index = resources.length - 1; index >= 0; index -= 1) {
+        const liga = graphLigaFromSource(resources[index]?.name);
+        if (liga) return liga;
+      }
     } catch (e) {}
-    return 0;
+    try {
+      const stored = sessionStorage.getItem("datasetPath") || sessionStorage.getItem("ligaAtual") || "";
+      const liga = graphLigaFromSource(stored);
+      if (liga) return liga;
+    } catch (e) {}
+    try {
+      const labels = { copa: 1, euro: 2, super: 3, premier: 4, split: 5 };
+      let best = 0;
+      let bestScore = 0;
+      document.querySelectorAll("button,a,[role='tab'],[data-liga],.active,.selected,.ativo").forEach((element) => {
+        const text = String(element.innerText || element.textContent || "").trim().toLowerCase();
+        const liga = labels[text];
+        if (!liga) return;
+        const box = element.getBoundingClientRect?.();
+        if (!box || box.width < 40 || box.height < 18 || box.top < 0 || box.top > 180) return;
+        const className = String(element.className || "");
+        const selected = /active|selected|ativo|current/i.test(className) ||
+          element.getAttribute?.("aria-selected") === "true" || Boolean(element.getAttribute?.("aria-current"));
+        const style = getComputedStyle(element);
+        const rgb = String(style.backgroundColor || "").match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/i);
+        const redBackground = rgb && Number(rgb[1]) > Number(rgb[2]) + 25 && Number(rgb[1]) > Number(rgb[3]) + 20;
+        const score = (selected ? 200 : 0) + (redBackground ? 120 : 0) + Math.max(0, 180 - box.top);
+        if (score > bestScore) { bestScore = score; best = liga; }
+      });
+      if (bestScore >= 120) return best;
+    } catch (e) {}
+    const direct = Number(window.BBTipsRobo?.activeLiga?.());
+    return direct >= 1 && direct <= 5 ? direct : 0;
   }
 
   function requestBridgedGraphData() {
@@ -3112,7 +3146,7 @@ window.BBTipsRobo={
         ? {
             waiting: true,
             message: bridgeRequested ? "carregando todos os pontos da liga..." : "aguardando a serie interna do grafico...",
-            detail: "Pontos internos: " + Math.max(cfgValues.length, siteValues.length) + " | resultados validos: " + internalResultsFromLoadedJson().length + (graphBridgePending ? " | buscando JSON da liga" : graphBridgeError ? " | erro da fonte: " + graphBridgeError : "") + "."
+            detail: "Liga detectada: " + (activeGraphLiga() || "nenhuma") + " | pontos internos: " + Math.max(cfgValues.length, siteValues.length) + " | resultados validos: " + internalResultsFromLoadedJson().length + (graphBridgePending ? " | buscando JSON da liga" : graphBridgeError ? " | erro da fonte: " + graphBridgeError : "") + "."
           }
         : null;
     }

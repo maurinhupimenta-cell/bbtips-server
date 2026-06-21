@@ -43,6 +43,7 @@ const functions = [
   "nativeMarketPays",
   "nativeMarkerKind",
   "nativeMarkerKindsFromConfig",
+  "graphLigaFromSource",
   "activeGraphLiga",
   "requestBridgedGraphData",
   "internalResultsFromLoadedJson",
@@ -79,7 +80,7 @@ function rowsFromScores(scores) {
   return rows;
 }
 
-function run({ cfg, points = [], rows = null, bridgedRows = null, selectedMarket = "", scannerMarket = "over25", hostname = "www.caramelotips.com.br", includeGraphElement = true }) {
+function run({ cfg, points = [], rows = null, bridgedRows = null, selectedMarket = "", scannerMarket = "over25", hostname = "www.caramelotips.com.br", includeGraphElement = true, activeLiga = 1, resourceUrls = [] }) {
   const elements = {
     graficoPrincipalNovoPanel: { querySelectorAll: () => [] },
     linhaFT: { value: selectedMarket },
@@ -92,7 +93,7 @@ function run({ cfg, points = [], rows = null, bridgedRows = null, selectedMarket
       __ultimoPontosSelecionado: points,
       LOADED_JSON: rows ? { table: { rows } } : null,
       __testBridgedJson: bridgedRows ? { table: { rows: bridgedRows } } : null,
-      BBTipsRobo: { config: { market: scannerMarket }, activeLiga: () => 1 },
+      BBTipsRobo: { config: { market: scannerMarket }, activeLiga: () => activeLiga },
       postMessage: () => {}
     },
     document: {
@@ -102,6 +103,8 @@ function run({ cfg, points = [], rows = null, bridgedRows = null, selectedMarket
       body: { innerText: "Tendencias Referencia" }
     },
     location: { hostname },
+    performance: { getEntriesByType: () => resourceUrls.map((name) => ({ name })) },
+    getComputedStyle: () => ({ backgroundColor: "rgb(15, 20, 28)" }),
     sessionStorage: { getItem: () => null },
     localStorage: { getItem: () => null },
     Array,
@@ -197,6 +200,31 @@ const thtipsBridged = run({
 });
 assert.equal(thtipsBridged.points.length, 41, "ponte da extensao deve tirar o grafico do estado aguardando");
 assert.equal(thtipsBridged.points.filter((point) => point.marker === "white" && point.delta !== 0).length > 0, true);
+
+function testActiveGraphLiga({ direct = 0, resources = [], stored = "" }) {
+  const context = {
+    window: { BBTipsRobo: { activeLiga: () => direct } },
+    performance: { getEntriesByType: () => resources.map((name) => ({ name })) },
+    sessionStorage: { getItem: () => stored },
+    document: { querySelectorAll: () => [] },
+    getComputedStyle: () => ({ backgroundColor: "rgb(15, 20, 28)" }),
+    Number,
+    String,
+    result: null
+  };
+  vm.createContext(context);
+  vm.runInContext(`${extractFunction("graphLigaFromSource")}\n${extractFunction("activeGraphLiga")}\nresult=activeGraphLiga();`, context);
+  return context.result;
+}
+
+assert.equal(testActiveGraphLiga({
+  direct: 6,
+  resources: [
+    "https://www.caramelotips.com.br/final/copa.json",
+    "https://www.caramelotips.com.br/final/super.json"
+  ]
+}), 3, "a URL mais recente do JSON deve identificar Super mesmo se a funcao antiga retornar liga 6");
+assert.equal(testActiveGraphLiga({ direct: 0, stored: "https://www.caramelotips.com.br/final/premier.json" }), 4);
 
 function testActiveLiga(platform, label) {
   const context = {
