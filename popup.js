@@ -11,7 +11,63 @@ function setStatus(text, cls = "info") {
   statusEl.className = cls;
 }
 
-async function sendToCurrentTab(type) {
+function isSupportedTab(tab) {
+  return /^https?:\/\/([^/]+\.)?(bbtips\.com\.br|bbtips\.com|thtips\.com\.br|caramelotips\.com\.br)\//i.test(tab?.url || "");
+}
+
+async function injectDirect(tab, type, cfg = {}) {
+  if (!tab?.id || !isSupportedTab(tab)) return false;
+
+  if (type === "BBTIPS_REMOVE") {
+    await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      world: "MAIN",
+      func: () => {
+        try {
+          clearInterval(window.BBTIPS_FINAL_ROBO_TIMER);
+          clearInterval(window.BBTIPS_API_ALERTAS_TIMER);
+          clearInterval(window.BBTIPS_INTERCEPTA_API_TIMER);
+          clearInterval(window.BBTIPS_PRO_TRADER_TIMER);
+          clearInterval(window.BBTIPS_SCANNER_COLLECT_TIMER);
+          clearInterval(window.BBTIPS_ROBO_ALERT_TIMER);
+          clearInterval(window.__BBTIPS_GRAPH_ROBO_TIMER);
+          clearInterval(window.HB_MULTI_TIMER);
+          document.getElementById("bbtips-final-robo")?.remove();
+          document.getElementById("bbtips-final-robo-style")?.remove();
+          document.getElementById("bbtips-api-alertas")?.remove();
+          document.getElementById("bbtips-intercepta-api")?.remove();
+          document.getElementById("hb-multi")?.remove();
+          document.getElementById("hb-tips-scanner")?.remove();
+          document.getElementById("bbtips-robo-root")?.remove();
+          document.getElementById("bbtips-robo-canvas")?.remove();
+          document.getElementById("bbtips-robo-desenho")?.remove();
+          document.getElementById("bbtips-marker-handle")?.remove();
+        } catch (e) {}
+      }
+    });
+    return true;
+  }
+
+  const robotUrl = chrome.runtime.getURL("robot.js") + "?v=" + Date.now();
+  await chrome.scripting.executeScript({
+    target: { tabId: tab.id },
+    world: "MAIN",
+    func: (remoteConfig, src) => {
+      window.__BBTIPS_REMOTE_CONFIG = remoteConfig;
+      document.getElementById("bbtips-robo-injected-script")?.remove();
+      const s = document.createElement("script");
+      s.id = "bbtips-robo-injected-script";
+      s.src = src;
+      s.onload = () => s.remove();
+      s.onerror = () => s.remove();
+      (document.head || document.documentElement).appendChild(s);
+    },
+    args: [cfg, robotUrl]
+  });
+  return true;
+}
+
+async function sendToCurrentTab(type, cfg = {}) {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (!tab?.id) return false;
 
@@ -24,7 +80,11 @@ async function sendToCurrentTab(type) {
       await chrome.tabs.sendMessage(tab.id, { type });
       return true;
     } catch (err) {
-      return false;
+      try {
+        return await injectDirect(tab, type, cfg);
+      } catch (directErr) {
+        return false;
+      }
     }
   }
 }
@@ -68,7 +128,11 @@ activateBtn.addEventListener("click", async () => {
       bbtips_api_base: API_BASE
     });
 
-    const sent = await sendToCurrentTab("BBTIPS_INJECT");
+    const sent = await sendToCurrentTab("BBTIPS_INJECT", {
+      apiBase: API_BASE,
+      token: String(data.token || ""),
+      username: user
+    });
     setStatus(sent ? "Login OK. Robô ativado." : "Login OK. Abra/recarregue o site BBTips.", "ok");
   } catch (e) {
     setStatus("Servidor offline ou sem conexão.", "bad");
