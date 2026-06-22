@@ -118,7 +118,23 @@ activateBtn.addEventListener("click", async () => {
       body: JSON.stringify({ username: user, user, password })
     });
 
-    const data = await response.json();
+    const raw = await response.text();
+    let data = {};
+    try {
+      data = raw ? JSON.parse(raw) : {};
+    } catch (parseError) {
+      data = {};
+    }
+
+    if (!response.ok) {
+      await chrome.storage.local.set({ bbtips_active: false, bbtips_user: user, bbtips_token: "" });
+      await sendToCurrentTab("BBTIPS_REMOVE");
+      const fallback = response.status === 401 || response.status === 403
+        ? "Login, senha ou licenca nao liberada."
+        : `Servidor respondeu erro ${response.status}.`;
+      setStatus(data.message || data.error || fallback, "bad");
+      return;
+    }
 
     if (!data.ok || !data.token) {
       await chrome.storage.local.set({ bbtips_active: false, bbtips_user: user, bbtips_token: "" });
