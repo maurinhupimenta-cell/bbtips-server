@@ -72,12 +72,18 @@ async function sendToCurrentTab(type, cfg = {}) {
   if (!tab?.id) return false;
 
   try {
-    await chrome.tabs.sendMessage(tab.id, { type });
+    const response = await chrome.tabs.sendMessage(tab.id, { type });
+    if (type === "BBTIPS_INJECT" && response?.ok === false) {
+      return await injectDirect(tab, type, cfg);
+    }
     return true;
   } catch (e) {
     try {
       await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ["content.js"] });
-      await chrome.tabs.sendMessage(tab.id, { type });
+      const response = await chrome.tabs.sendMessage(tab.id, { type });
+      if (type === "BBTIPS_INJECT" && response?.ok === false) {
+        return await injectDirect(tab, type, cfg);
+      }
       return true;
     } catch (err) {
       try {
@@ -128,11 +134,14 @@ activateBtn.addEventListener("click", async () => {
       bbtips_api_base: API_BASE
     });
 
-    const sent = await sendToCurrentTab("BBTIPS_INJECT", {
+    const injectCfg = {
       apiBase: API_BASE,
       token: String(data.token || ""),
       username: user
-    });
+    };
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    const sent = await injectDirect(tab, "BBTIPS_INJECT", injectCfg)
+      || await sendToCurrentTab("BBTIPS_INJECT", injectCfg);
     setStatus(sent ? "Login OK. Robô ativado." : "Login OK. Abra/recarregue o site BBTips.", "ok");
   } catch (e) {
     setStatus("Servidor offline ou sem conexão.", "bad");
