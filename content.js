@@ -53,6 +53,33 @@ async function sendCollectorRows(rows, sentAt, meta = {}) {
   }).catch(() => {});
 }
 
+async function loginFromContent(username, password) {
+  const response = await fetch(`${API_BASE}/api/login`, {
+    method: "POST",
+    mode: "cors",
+    credentials: "omit",
+    cache: "no-store",
+    redirect: "follow",
+    referrerPolicy: "no-referrer",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username, user: username, password })
+  });
+  const raw = await response.text();
+  let data = {};
+  try {
+    data = raw ? JSON.parse(raw) : {};
+  } catch (parseError) {
+    data = {};
+  }
+  if (!response.ok) {
+    const fallback = response.status === 401 || response.status === 403
+      ? "Login, senha ou licenca nao liberada."
+      : `Servidor respondeu erro ${response.status}.`;
+    return { ok: false, status: response.status, error: data.message || data.error || fallback };
+  }
+  return { ok: true, data };
+}
+
 window.addEventListener("message", (event) => {
   if (event.source !== window) return;
   const msg = event.data || {};
@@ -151,6 +178,13 @@ chrome.storage.local.get(["bbtips_active"], async (res) => {
 });
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (msg?.type === "BBTIPS_LOGIN_VIA_CONTENT") {
+    loginFromContent(String(msg.username || ""), String(msg.password || ""))
+      .then((result) => sendResponse(result))
+      .catch((error) => sendResponse({ ok: false, error: `Falha no login pela aba: ${error?.message || error}` }));
+    return true;
+  }
+
   if (msg?.type === "BBTIPS_INJECT") {
     checkLicenseOnce().then(async (ok) => {
       if (ok) await injectRobot();

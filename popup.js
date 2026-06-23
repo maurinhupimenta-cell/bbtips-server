@@ -95,6 +95,21 @@ async function sendToCurrentTab(type, cfg = {}) {
   }
 }
 
+async function loginViaCurrentTab(username, password) {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (!tab?.id || !isSupportedTab(tab)) {
+    return { ok: false, error: "Abra o site BBTips/Caramelo antes de ativar." };
+  }
+  try {
+    await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ["content.js"] });
+  } catch (e) {}
+  return await chrome.tabs.sendMessage(tab.id, {
+    type: "BBTIPS_LOGIN_VIA_CONTENT",
+    username,
+    password
+  });
+}
+
 chrome.storage.local.get(["bbtips_user", "bbtips_token", "bbtips_active"], (res) => {
   if (res.bbtips_user) loginInput.value = res.bbtips_user;
   setStatus(res.bbtips_active ? "Logado e ativo." : "Faça login para ativar.", res.bbtips_active ? "ok" : "info");
@@ -112,7 +127,11 @@ activateBtn.addEventListener("click", async () => {
   setStatus("Conectando ao servidor...", "info");
 
   try {
-    const loginResult = await chrome.runtime.sendMessage({ type: "BBTIPS_LOGIN", username: user, password });
+    let loginResult = await chrome.runtime.sendMessage({ type: "BBTIPS_LOGIN", username: user, password });
+    if (!loginResult?.ok && /blocked/i.test(String(loginResult?.error || ""))) {
+      setStatus("Background bloqueado. Tentando pela aba do site...", "info");
+      loginResult = await loginViaCurrentTab(user, password);
+    }
     const data = loginResult?.data || {};
 
     if (!loginResult?.ok) {
