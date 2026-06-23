@@ -112,27 +112,13 @@ activateBtn.addEventListener("click", async () => {
   setStatus("Conectando ao servidor...", "info");
 
   try {
-    const response = await fetch(`${API_BASE}/api/login`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ username: user, user, password })
-    });
+    const loginResult = await chrome.runtime.sendMessage({ type: "BBTIPS_LOGIN", username: user, password });
+    const data = loginResult?.data || {};
 
-    const raw = await response.text();
-    let data = {};
-    try {
-      data = raw ? JSON.parse(raw) : {};
-    } catch (parseError) {
-      data = {};
-    }
-
-    if (!response.ok) {
+    if (!loginResult?.ok) {
       await chrome.storage.local.set({ bbtips_active: false, bbtips_user: user, bbtips_token: "" });
       await sendToCurrentTab("BBTIPS_REMOVE");
-      const fallback = response.status === 401 || response.status === 403
-        ? "Login, senha ou licenca nao liberada."
-        : `Servidor respondeu erro ${response.status}.`;
-      setStatus(data.message || data.error || fallback, "bad");
+      setStatus(loginResult?.error || "Login bloqueado ou invalido.", "bad");
       return;
     }
 
@@ -160,7 +146,7 @@ activateBtn.addEventListener("click", async () => {
       || await sendToCurrentTab("BBTIPS_INJECT", injectCfg);
     setStatus(sent ? "Login OK. Robô ativado." : "Login OK. Abra/recarregue o site BBTips.", "ok");
   } catch (e) {
-    setStatus("Servidor offline ou sem conexão.", "bad");
+    setStatus(`Falha no login: ${e?.message || e}`, "bad");
   }
 });
 

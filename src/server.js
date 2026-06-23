@@ -642,7 +642,7 @@ app.delete("/api/admin/users/:id", requireAdmin, async (req, res) => {
 
 app.post("/api/login", async (req, res) => {
   const { username, password } = req.body || {};
-  const found = await pool.query("select * from users where username=$1", [username]);
+  const found = await pool.query("select * from users where lower(username)=lower($1)", [username]);
   const user = found.rows[0];
   if (!user || !(await bcrypt.compare(password || "", user.password_hash))) {
     return res.status(401).json({ ok: false, error: "login invalido" });
