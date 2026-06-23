@@ -1,9 +1,12 @@
 {
   "manifest_version": 3,
   "name": "BBTips Robô",
-  "version": "1.0.79",
+  "version": "1.0.80",
   "description": "Injeta o robô BBTips somente após ativação da licença.",
   "permissions": ["storage", "activeTab", "scripting"],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'; connect-src 'self' https://bbtips-server-production.up.railway.app https://www.caramelotips.com.br"
+  },
   "background": {
     "service_worker": "background.js"
   },
