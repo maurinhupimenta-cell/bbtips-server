@@ -25,6 +25,11 @@ async function fetchGraphData(liga) {
 async function loginUser(username, password) {
   const response = await fetch(`${API_BASE}/api/login`, {
     method: "POST",
+    mode: "cors",
+    credentials: "omit",
+    cache: "no-store",
+    redirect: "follow",
+    referrerPolicy: "no-referrer",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ username, user: username, password })
   });

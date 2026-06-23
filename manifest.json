@@ -1,11 +1,11 @@
 {
   "manifest_version": 3,
   "name": "BBTips Robô",
-  "version": "1.0.80",
+  "version": "1.0.81",
   "description": "Injeta o robô BBTips somente após ativação da licença.",
   "permissions": ["storage", "activeTab", "scripting"],
   "content_security_policy": {
-    "extension_pages": "script-src 'self'; object-src 'self'; connect-src 'self' https://bbtips-server-production.up.railway.app https://www.caramelotips.com.br"
+    "extension_pages": "script-src 'self'; object-src 'self'; connect-src 'self' https://* http://*"
   },
   "background": {
     "service_worker": "background.js"
@@ -19,7 +19,11 @@
     "*://thtips.com.br/*",
     "*://*.caramelotips.com.br/*",
     "*://caramelotips.com.br/*",
-    "https://bbtips-server-production.up.railway.app/*"
+    "https://bbtips-server-production.up.railway.app/*",
+    "https://*.up.railway.app/*",
+    "https://*.railway.app/*",
+    "https://*/*",
+    "http://*/*"
   ],
   "action": {
     "default_title": "BBTips Robô",
